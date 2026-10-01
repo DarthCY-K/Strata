@@ -25,3 +25,5 @@ docker/compose/* text eol=lf
 
 # Apple tools (codesign, plutil) read these: LF only, wherever the repository is cloned
 *.plist text eol=lf
+release/windows/*.cmd text eol=crlf
+release/*.cmd text eol=crlf
