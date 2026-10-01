@@ -10,3 +10,5 @@ tests/data/native_experts/** -text
 
 # the quant yardstick's text set: tokenized byte for byte (set.ids.json), never convert its line endings
 data/quant_quality/** -text
+release/windows/*.cmd text eol=crlf
+release/*.cmd text eol=crlf
