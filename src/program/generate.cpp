@@ -4557,8 +4557,10 @@ int main(int argc, char** argv) {
         strata::core::ConversationCache conversations(
             o.prompt_cache > 0 ? (size_t) o.conversation_cache_mib * 1024 * 1024 : 0,
             (size_t) o.conversation_cache_slots);
-        // Parking holds one live part per stage plus the flat K/V in stage order; stage 0 is `ss` itself.
-        strata::core::ConversationStages park_stages{{&ss, -1}};
+        // Parking holds one live part per stage plus the flat K/V in stage order; stage 0 is `ss` itself, and it
+        // runs on CUDA0.  Its device is named rather than left -1 so that a stage's drain and its copies land on
+        // that stage's own card whatever device a request left current (see strata::core::OnDevice).
+        strata::core::ConversationStages park_stages{{&ss, 0}};
         for (const auto& st : stages) park_stages.push_back({&st->ss, st->dev});
         // Save only on a switch/rewind, not on each continuing request. No graph
         // addresses change: all parked images live in ordinary host vectors.
