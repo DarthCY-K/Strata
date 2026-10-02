@@ -4661,6 +4661,11 @@ int main(int argc, char** argv) {
                 c.tails = std::move((*parts)[0].tails);
                 c.dead = std::move((*parts)[0].dead);
                 c.block_pos = std::move((*parts)[0].block_pos);
+                // the carve the part was saved from: without it every mid-prompt checkpoint of a layer split failed
+                // validation ("checkpoint from another session layer carve"), and with it every park of a conversation
+                // that had read more than --prompt-cache-every tokens
+                c.layer_lo = (*parts)[0].layer_lo;
+                c.layer_hi = (*parts)[0].layer_hi;
                 for (size_t i = 1; i < parts->size(); ++i) c.stage_parts.push_back(std::move((*parts)[i]));
             } else {
                 if (cudaDeviceSynchronize() != cudaSuccess || !checkpoint_save(c, ss, g)) return false;
