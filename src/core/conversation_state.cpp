@@ -296,7 +296,7 @@ bool conversation_snapshot_save(SavedConversation& image, const ConversationView
                                 const QsaState& draft, std::string& error,
                                 ConversationKvReuse reuse, size_t* reused_bytes) {
     size_t estimate = 0;
-    if (!conversation_snapshot_capture_bytes(reuse, view, stages, g, draft, estimate, error) || !sync(error)) return false;
+    if (!conversation_snapshot_capture_bytes(reuse, view, stages, g, draft, estimate, error)) return false;
     // Build into a new object so a failure cannot publish a partial snapshot.
     SavedConversation captured;
     captured.geometry = geometry_key(g);
@@ -307,24 +307,23 @@ bool conversation_snapshot_save(SavedConversation& image, const ConversationView
     const int64_t unchanged = reuse.kv.empty() ? 0 : reuse.unchanged_tokens;
     captured.kv = std::move(reuse.kv);
     captured.kv.resize(total_owned(stages) + 1);
-    if (!conversation_checkpoint_save(captured.live, first, g, error)) return false;
-    for (size_t i = 1; i < stages.size(); ++i) {   // each later stage's live part, read on its device
-        const OnDevice on(stages[i].dev);
-        ConversationCheckpoint part;
-        part.ids = captured.live.ids; part.imgs = captured.live.imgs;
-        if (!conversation_checkpoint_save(part, *stages[i].ss, g, error)) return false;
-        captured.live.stage_parts.push_back(std::move(part));
-    }
     const int64_t upto = (int64_t) view.ids.size();
+    // cudaDeviceSynchronize drains only the device the calling thread is bound to, so each stage is read on
+    // its own device and drained there first: a copy must not race kernels still writing its buffers.
     size_t entry = 0;
     for (size_t i = 0; i < stages.size(); ++i) {
+        const SessionState& ss = *stages[i].ss;
         const OnDevice on(stages[i].dev);
-        for (size_t j = 0; j < owned_qsa(*stages[i].ss); ++j)
-            if (!conversation_kv_save(captured.kv[entry++], owned(*stages[i].ss, j), g, upto, true, error,
+        if (!sync(error)) return false;
+        ConversationCheckpoint& part = i == 0 ? captured.live : captured.live.stage_parts.emplace_back();
+        if (i != 0) { part.ids = captured.live.ids; part.imgs = captured.live.imgs; }
+        if (!conversation_checkpoint_save(part, ss, g, error)) return false;
+        for (size_t j = 0; j < owned_qsa(ss); ++j)
+            if (!conversation_kv_save(captured.kv[entry++], owned(ss, j), g, upto, true, error,
                                       unchanged, reused_bytes)) return false;
     }
-    // The draft's final cell may not have been computed when the output cap was
-    // reached. Refresh that page even when the main prefix continued unchanged.
+    // The draft's final cell may not have been computed when the output cap was reached. Refresh that page
+    // even when the main prefix continued unchanged; the drafter lives on the last stage, already drained.
     {
         const OnDevice on(stages.back().dev);
         if (!conversation_kv_save(captured.kv.back(), draft, g, upto, false, error,
@@ -356,24 +355,24 @@ bool conversation_snapshot_validate(const SavedConversation& image, const Conver
 ConversationRestore conversation_snapshot_restore(const SavedConversation& image, const ConversationStages& stages,
                                                    const ModelGeometry& g, const QsaState& draft, std::string& error) {
     if (!conversation_snapshot_validate(image, stages, g, draft, error)) return ConversationRestore::invalid;
-    if (!sync(error)) return ConversationRestore::transfer_failed;
     const int64_t upto = (int64_t) image.live.ids.size();
+    // Each stage is drained on its own device before anything there is written: cudaDeviceSynchronize covers
+    // only the device the calling thread is bound to, so kernels still running on another stage could land
+    // after these copies. After a drain nothing is enqueued - these copies are synchronous.
     size_t entry = 0;
     for (size_t i = 0; i < stages.size(); ++i) {
+        SessionState& ss = *stages[i].ss;
         const OnDevice on(stages[i].dev);
-        for (size_t j = 0; j < owned_qsa(*stages[i].ss); ++j)
-            if (!conversation_kv_restore(image.kv[entry++], owned(*stages[i].ss, j), g, upto, true, error))
+        if (!sync(error)) return ConversationRestore::transfer_failed;
+        for (size_t j = 0; j < owned_qsa(ss); ++j)
+            if (!conversation_kv_restore(image.kv[entry++], owned(ss, j), g, upto, true, error))
                 return ConversationRestore::transfer_failed;
+        const ConversationCheckpoint& part = i == 0 ? image.live : image.live.stage_parts[i - 1];
+        if (!conversation_checkpoint_restore(part, ss, g, error)) return ConversationRestore::transfer_failed;
     }
     {
-        const OnDevice on(stages.back().dev);
+        const OnDevice on(stages.back().dev);   // the drafter lives on the last stage, already drained
         if (!conversation_kv_restore(image.kv.back(), draft, g, upto, false, error))
-            return ConversationRestore::transfer_failed;
-    }
-    for (size_t i = 0; i < stages.size(); ++i) {
-        const OnDevice on(stages[i].dev);
-        const ConversationCheckpoint& part = i == 0 ? image.live : image.live.stage_parts[i - 1];
-        if (!conversation_checkpoint_restore(part, *stages[i].ss, g, error))
             return ConversationRestore::transfer_failed;
     }
     return ConversationRestore::restored;

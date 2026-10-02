@@ -10,7 +10,8 @@
 
 namespace strata::core {
 
-// Caller synchronizes the device before saving, and after restoring all layers.
+// Each stage is drained on its own device before its running state or K/V is read (saving) or written
+// (restoring); a copy on one card cannot wait for kernels still running on another.
 // include_index is false for the draft layer (its attention has no indexer).
 size_t conversation_kv_bytes(const QsaState& state, const ModelGeometry& g, int64_t upto, bool include_index);
 // A nonzero unchanged_tokens is valid only for storage retained from an image
