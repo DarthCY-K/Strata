@@ -8,6 +8,8 @@
 #include <functional>
 #include <limits>
 #include <cstring>
+#include <utility>
+#include <vector>
 
 #if defined(CONVERSATION_TEST_TRANSFERS)
 // GNU/ELF link wrapping exercises the actual restore control flow without
@@ -16,14 +18,28 @@
 namespace {
 int copy_calls = 0, sync_calls = 0, fail_copy = 0, fail_sync = 0;
 size_t copied_bytes = 0;
+int current_device = 0;                        // the device OnDevice has made current
+int drained_on_device[4] = {0};                // drains counted on each device
+struct CopyEvent { int device; int drains; const void* dst; const void* src; };
+std::vector<CopyEvent> copy_order;   // what the wrapping backend saw at each copy
+void reset_counters() {
+    copy_calls = sync_calls = fail_copy = fail_sync = 0;
+    copied_bytes = 0; current_device = 0;
+    for (int& n : drained_on_device) n = 0;
+    copy_order.clear();
 }
+}
+extern "C" cudaError_t __wrap_cudaGetDevice(int* p) { *p = current_device; return cudaSuccess; }
+extern "C" cudaError_t __wrap_cudaSetDevice(int d) { current_device = d; return cudaSuccess; }
 extern "C" cudaError_t __wrap_cudaMemcpy(void* dst, const void* src, size_t n, cudaMemcpyKind) {
     if (++copy_calls == fail_copy) return cudaErrorInvalidValue;
     copied_bytes += n;
+    copy_order.push_back({current_device, drained_on_device[current_device], dst, src});
     std::memcpy(dst, src, n);
     return cudaSuccess;
 }
 extern "C" cudaError_t __wrap_cudaDeviceSynchronize() {
+    ++drained_on_device[current_device];
     return ++sync_calls == fail_sync ? cudaErrorUnknown : cudaSuccess;
 }
 extern "C" cudaError_t __wrap_cudaGetLastError() { return cudaSuccess; }
@@ -174,7 +190,7 @@ void fixture(int format, int experts, bool zero_qsa, bool ple) {
         for (auto* p : {&first,&last,&draft}) for (auto& bytes : p->data) std::fill(bytes.begin(),bytes.end(),0xa5);
         std::fill(gdn.begin(),gdn.end(),0xa5); std::fill(history.begin(),history.end(),0xa5);
         ss.ple_prev[0] = ss.ple_prev[1] = -1;
-        copy_calls = sync_calls = fail_copy = fail_sync = 0;
+        reset_counters();
     };
     reset(); fail_sync = 1;
     check(conversation_snapshot_restore(image,stages,g,draft.st,error)==ConversationRestore::transfer_failed,
@@ -305,6 +321,18 @@ void split_fixture(int format) {
           "missing stage part rejected before writes");
     check(unchanged(), "short part list did not touch any stage");
 #if defined(CONVERSATION_TEST_TRANSFERS)
+    // Real device numbers here: a -1 device cannot show which card a copy was made on, and the point is that
+    // each stage is drained on its own card before anything there is read or written.
+    stages = {{&stage0, 0}, {&stage1, 1}};
+    auto on_stage1 = [&](const void* p) {
+        auto inside = [&](const std::vector<uint8_t>& v) {
+            return p >= (const void*) v.data() && p < (const void*) (v.data() + v.size());
+        };
+        if (inside(gdn1) || inside(hist1)) return true;
+        for (const auto& bytes : second.data) if (inside(bytes)) return true;
+        return false;
+    };
+    reset_counters();
     check(conversation_snapshot_restore(image, stages, g, draft.st, error) == ConversationRestore::restored,
           "injected host transfer backend restores both stages");
     check(gdn0 == image.live.gdn && hist0 == image.live.ple &&
@@ -317,6 +345,28 @@ void split_fixture(int format) {
           second.data[7] == image.live.stage_parts[0].block_pos, "stage 1's indexer payload landed");
     check(stage0.ple_prev[0] == 8 && stage0.ple_prev[1] == 9 &&
           stage1.ple_prev[0] == 8 && stage1.ple_prev[1] == 9, "both stages got the PLE window");
+    bool after_drain = true, stage1_written = false;
+    for (const CopyEvent& e : copy_order) {
+        if (e.drains < 1) after_drain = false;
+        if (!on_stage1(e.dst)) continue;
+        stage1_written = true;
+        if (e.device != 1) after_drain = false;   // the copy was made on another card's scope
+    }
+    check(after_drain && stage1_written,
+          "stage 1's buffers were written on its own device after that device was drained");
+    reset_counters();
+    SavedConversation captured;
+    check(conversation_snapshot_save(captured, {image.live.ids, image.live.imgs, image.checkpoints, true},
+                                     stages, g, draft.st, error), "split capture through the host backend");
+    bool stage1_read = false, read_after_drain = true;
+    for (const CopyEvent& e : copy_order) {
+        if (e.drains < 1) read_after_drain = false;
+        if (!on_stage1(e.src)) continue;
+        stage1_read = true;
+        if (e.device != 1) read_after_drain = false;
+    }
+    check(read_after_drain && stage1_read,
+          "stage 1's state was read on its own device after that device was drained");
 #endif
 }
 }
