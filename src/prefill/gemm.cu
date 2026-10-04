@@ -446,7 +446,10 @@ int bf16_path() {
     if (cc <= 0 || cc >= 80) return 0;
     if (cc < 70) return 2;
     if (forced >= 0) return forced != 0 ? 1 : 0;
-    return cc < 75 ? 1 : 0;
+    // Turing patch (this fork): 0.1.39 sends sm_75 to cuBLAS here.  Measured on 2x 2080 Ti, the FP16 tensor-core
+    // path is 2.4x faster for the hyper-connection projections in prefill (60K tokens: the stage 0.84 s vs 2.18 s),
+    // and it is what the validated 0.1.38 build ran (upstream PR #655).  STRATA_BF16_TC=0 still forces cuBLAS.
+    return cc < 80 ? 1 : 0;
 }
 bool grow(uint16_t*& p, int64_t& have, int64_t want) {   // `have`, `want`: 2-byte elements
     if (have >= want) return true;
