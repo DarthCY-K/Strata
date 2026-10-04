@@ -1160,8 +1160,9 @@ __global__ void __launch_bounds__(256) native_gu_kernel(const unsigned long long
 // A group has at most one entry per token of the window (kVerifyMaxT = 8; setup writes --spec 4, and a split window
 // has halves of <= 4), so 4 takes such windows in one pass; 8 would take ~64-80 registers against ~48 (ptxas -v).
 constexpr int GRP_NC = 4;
+constexpr int kGuXbMax = 80;   // activation staging: up to n_embd 2560 (xb = n_embd / 32 q8_1 blocks per row)
 
-template<int TG, bool STAGE_GRID = kStageIqGrid<TG>>
+template<int TG, bool STAGE_GRID = kStageIqGrid<TG>, bool STAGE_X = false>
 __global__ void __launch_bounds__(256) native_gu_multi_kernel(const unsigned long long* __restrict__ grp_ptr,
                                                               const int32_t* __restrict__ grp_start,
                                                               const int32_t* __restrict__ n_groups,
@@ -1173,6 +1174,12 @@ __global__ void __launch_bounds__(256) native_gu_multi_kernel(const unsigned lon
     __shared__ alignas(16) uint32_t s_grid_buf[IqGridWords<TG, STAGE_GRID>::value];
     const uint32_t* s_grid = stage_iq_grid<TG, STAGE_GRID>(s_grid_buf, threadIdx.x, 256);
     const int nb = (int) (L.n_embd / Fmt<TG>::qk), xb = (int) (L.n_embd / 32);
+    // The block copies the chunk's <= GRP_NC activation rows (xb q8_1 blocks each, 9 words each) to shared
+    // memory once; its subwarps (or warps) then read x there.  The values and the arithmetic are unchanged.
+    __shared__ alignas(16) uint32_t s_xw[STAGE_X ? GRP_NC * kGuXbMax * 9 : 4];
+    const block_q8_1* const s_x_stage = (const block_q8_1*) s_xw;
+    const bool stage_x = STAGE_X && xb <= kGuXbMax;
+    const int xw_words = xb * 9;      // 32-bit words per activation row
     if (xb == 80) {
         const int subwarp = threadIdx.x >> 4, t = threadIdx.x & 15;
         const int row = blockIdx.x * 16 + subwarp;            // 0 .. 2*n_ff
@@ -1186,25 +1193,34 @@ __global__ void __launch_bounds__(256) native_gu_multi_kernel(const unsigned lon
             const int e0 = grp_start[g], e1 = grp_start[g + 1];
             for (int e = e0; e < e1; e += GRP_NC) {
                 const int n = min(GRP_NC, e1 - e);
+                if (stage_x) {
+                    __syncthreads();                      // the previous chunk's readers are done
+                    for (int i = threadIdx.x; i < n * xw_words; i += 256) {
+                        const int c = i / xw_words, wi = i - c * xw_words;
+                        s_xw[c * xw_words + wi] = ((const uint32_t*) (xq + (size_t) ent_tok[e + c] * xb))[wi];
+                    }
+                    __syncthreads();
+                }
+                const block_q8_1* const xs = stage_x ? s_x_stage : xq;
                 if (n == 1) {
-                    const int off1[1] = { ent_tok[e] * 80 };
+                    const int off1[1] = { (stage_x ? 0 : ent_tok[e]) * 80 };
                     float s1[1];
-                    row_dot_80_sub16<TG, 1, true, STAGE_GRID>(wr, xq, off1, 1, t, s1, s_grid);
+                    row_dot_80_sub16<TG, 1, true, STAGE_GRID>(wr, xs, off1, 1, t, s1, s_grid);
                     if (t == 0) dst[(size_t) e * L.n_ff + r] = s1[0];
                 } else if (n == 2) {
-                    const int off2[2] = { ent_tok[e] * 80, ent_tok[e + 1] * 80 };
+                    const int off2[2] = { (stage_x ? 0 : ent_tok[e]) * 80, (stage_x ? 1 : ent_tok[e + 1]) * 80 };
                     float s2[2];
-                    row_dot_80_sub16<TG, 2, true, STAGE_GRID>(wr, xq, off2, 2, t, s2, s_grid);
+                    row_dot_80_sub16<TG, 2, true, STAGE_GRID>(wr, xs, off2, 2, t, s2, s_grid);
                     if (t < 2) dst[(size_t) (e + t) * L.n_ff + r] = s2[t];
                 } else if (n == 3) {
-                    const int off3[3] = { ent_tok[e] * 80, ent_tok[e + 1] * 80, ent_tok[e + 2] * 80 };
+                    const int off3[3] = { (stage_x ? 0 : ent_tok[e]) * 80, (stage_x ? 1 : ent_tok[e + 1]) * 80, (stage_x ? 2 : ent_tok[e + 2]) * 80 };
                     float s3[3];
-                    row_dot_80_sub16<TG, 3, true, STAGE_GRID>(wr, xq, off3, 3, t, s3, s_grid);
+                    row_dot_80_sub16<TG, 3, true, STAGE_GRID>(wr, xs, off3, 3, t, s3, s_grid);
                     if (t < 3) dst[(size_t) (e + t) * L.n_ff + r] = s3[t];
                 } else {
-                    const int off4[4] = { ent_tok[e] * 80, ent_tok[e + 1] * 80, ent_tok[e + 2] * 80, ent_tok[e + 3] * 80 };
+                    const int off4[4] = { (stage_x ? 0 : ent_tok[e]) * 80, (stage_x ? 1 : ent_tok[e + 1]) * 80, (stage_x ? 2 : ent_tok[e + 2]) * 80, (stage_x ? 3 : ent_tok[e + 3]) * 80 };
                     float s4[4];
-                    row_dot_80_sub16<TG, 4, true, STAGE_GRID>(wr, xq, off4, 4, t, s4, s_grid);
+                    row_dot_80_sub16<TG, 4, true, STAGE_GRID>(wr, xs, off4, 4, t, s4, s_grid);
                     if (t < 4) dst[(size_t) (e + t) * L.n_ff + r] = s4[t];
                 }
             }
@@ -1223,25 +1239,34 @@ __global__ void __launch_bounds__(256) native_gu_multi_kernel(const unsigned lon
         const int e0 = grp_start[g], e1 = grp_start[g + 1];
         for (int e = e0; e < e1; e += GRP_NC) {
             const int n = min(GRP_NC, e1 - e);
+            if (stage_x) {
+                __syncthreads();                  // the previous chunk's readers are done
+                for (int i = threadIdx.x; i < n * xw_words; i += 256) {
+                    const int c = i / xw_words, wi = i - c * xw_words;
+                    s_xw[c * xw_words + wi] = ((const uint32_t*) (xq + (size_t) ent_tok[e + c] * xb))[wi];
+                }
+                __syncthreads();
+            }
+            const block_q8_1* const xs = stage_x ? s_x_stage : xq;
             if (n == 1) {
-                const int off1[1] = { ent_tok[e] * xb };
+                const int off1[1] = { (stage_x ? 0 : ent_tok[e]) * xb };
                 float s1[1];
-                row_dot_multi<TG, 1, true, STAGE_GRID>(wr, xq, off1, 1, nb, lane, s1, s_grid);
+                row_dot_multi<TG, 1, true, STAGE_GRID>(wr, xs, off1, 1, nb, lane, s1, s_grid);
                 if (lane == 0) dst[(size_t) e * L.n_ff + r] = s1[0];
             } else if (n == 2) {
-                const int off2[2] = { ent_tok[e] * xb, ent_tok[e + 1] * xb };
+                const int off2[2] = { (stage_x ? 0 : ent_tok[e]) * xb, (stage_x ? 1 : ent_tok[e + 1]) * xb };
                 float s2[2];
-                row_dot_multi<TG, 2, true, STAGE_GRID>(wr, xq, off2, 2, nb, lane, s2, s_grid);
+                row_dot_multi<TG, 2, true, STAGE_GRID>(wr, xs, off2, 2, nb, lane, s2, s_grid);
                 if (lane < 2) dst[(size_t) (e + lane) * L.n_ff + r] = s2[lane];
             } else if (n == 3) {
-                const int off3[3] = { ent_tok[e] * xb, ent_tok[e + 1] * xb, ent_tok[e + 2] * xb };
+                const int off3[3] = { (stage_x ? 0 : ent_tok[e]) * xb, (stage_x ? 1 : ent_tok[e + 1]) * xb, (stage_x ? 2 : ent_tok[e + 2]) * xb };
                 float s3[3];
-                row_dot_multi<TG, 3, true, STAGE_GRID>(wr, xq, off3, 3, nb, lane, s3, s_grid);
+                row_dot_multi<TG, 3, true, STAGE_GRID>(wr, xs, off3, 3, nb, lane, s3, s_grid);
                 if (lane < 3) dst[(size_t) (e + lane) * L.n_ff + r] = s3[lane];
             } else {
-                const int off4[4] = { ent_tok[e] * xb, ent_tok[e + 1] * xb, ent_tok[e + 2] * xb, ent_tok[e + 3] * xb };
+                const int off4[4] = { (stage_x ? 0 : ent_tok[e]) * xb, (stage_x ? 1 : ent_tok[e + 1]) * xb, (stage_x ? 2 : ent_tok[e + 2]) * xb, (stage_x ? 3 : ent_tok[e + 3]) * xb };
                 float s4[4];
-                row_dot_multi<TG, 4, true, STAGE_GRID>(wr, xq, off4, 4, nb, lane, s4, s_grid);
+                row_dot_multi<TG, 4, true, STAGE_GRID>(wr, xs, off4, 4, nb, lane, s4, s_grid);
                 if (lane < 4) dst[(size_t) (e + lane) * L.n_ff + r] = s4[lane];
             }
         }
@@ -1821,6 +1846,11 @@ bool env_on(const char* name) {
 }
 // STRATA_OLD_IQ_MMVQ=1 keeps the per-column kernels (bitwise equal to the new ones; kept for A/B timing)
 bool g_old_kernels = env_on("STRATA_OLD_IQ_MMVQ");
+// STRATA_GU_STAGE_X=0 keeps native_gu_multi_kernel reading the activations from global memory per row
+bool g_gu_stage_x = [] {
+    const char* v = std::getenv("STRATA_GU_STAGE_X");
+    return v == nullptr || v[0] == '\0' || v[0] != '0';
+}();
 // STRATA_IQ_STAGE_GRID=0 disables staging 64-bit i-quant codebook tables into shared memory
 bool g_stage_grid = [] {
     const char* v = std::getenv("STRATA_IQ_STAGE_GRID");
@@ -1874,13 +1904,18 @@ void launch_gu(dim3 grid, cudaStream_t s, const unsigned long long* grp_ptr, con
                float* gate, float* up) {
     if constexpr (!kSplit<TG>) native_gu_kernel<TG><<<grid, 256, 0, s>>>(grp_ptr, grp_start, n_groups, ent_tok, X, L, gate, up);
     else if (g_old_kernels) native_gu_kernel<TG><<<grid, 256, 0, s>>>(grp_ptr, grp_start, n_groups, ent_tok, X, L, gate, up);
-    else if constexpr (kStageIqGrid<TG>) {
-        if (!g_stage_grid) {
-            native_gu_multi_kernel<TG, false><<<grid, 256, 0, s>>>(grp_ptr, grp_start, n_groups, ent_tok, X, L, gate, up);
-            return;
+    else {
+        constexpr bool SG = kStageIqGrid<TG>;
+        const bool sg = SG && g_stage_grid;
+        const bool sx = g_gu_stage_x && L.n_embd / 32 <= kGuXbMax;
+        if (sg) {
+            if (sx) native_gu_multi_kernel<TG, SG, true><<<grid, 256, 0, s>>>(grp_ptr, grp_start, n_groups, ent_tok, X, L, gate, up);
+            else native_gu_multi_kernel<TG, SG, false><<<grid, 256, 0, s>>>(grp_ptr, grp_start, n_groups, ent_tok, X, L, gate, up);
+        } else {
+            if (sx) native_gu_multi_kernel<TG, false, true><<<grid, 256, 0, s>>>(grp_ptr, grp_start, n_groups, ent_tok, X, L, gate, up);
+            else native_gu_multi_kernel<TG, false, false><<<grid, 256, 0, s>>>(grp_ptr, grp_start, n_groups, ent_tok, X, L, gate, up);
         }
-        native_gu_multi_kernel<TG><<<grid, 256, 0, s>>>(grp_ptr, grp_start, n_groups, ent_tok, X, L, gate, up);
-    } else native_gu_multi_kernel<TG><<<grid, 256, 0, s>>>(grp_ptr, grp_start, n_groups, ent_tok, X, L, gate, up);
+    }
 }
 
 template<int TD>
