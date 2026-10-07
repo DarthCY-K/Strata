@@ -442,9 +442,25 @@ static int64_t pf_switch_min_t() {   // S23: STRATA_PF_SWITCH_MIN_T=N - the roun
     static const int64_t v = [] { const char* e = std::getenv("STRATA_PF_SWITCH_MIN_T"); return e ? (int64_t) std::atoll(e) : (int64_t) 0; }();
     return v;
 }
+// The fork: the default on CUDA compute capability 12.x, where it is the default pair's bits at chunks of 33+ tokens
+// (RTX 5090, CUDA 13.3); opt-in elsewhere (gfx11 unchanged); STRATA_HC_UPMIX=0 off everywhere.
 inline bool hc_upmix() {
-    static const bool v = [] { const char* e = std::getenv("STRATA_HC_UPMIX"); return e != nullptr && e[0] == '1'; }();
-    return v;
+    static const int env = [] { const char* e = std::getenv("STRATA_HC_UPMIX"); return e == nullptr ? -1 : e[0] == '1' ? 1 : 0; }();
+    if (env >= 0) return env == 1;
+#if defined(__HIPCC__)
+    return false;
+#else
+    static int known[64] = {};   // per device (a layer split can mix cards): 0 not asked yet, 1 compute capability 12.x, 2 no
+    int dev = 0;
+    if (cudaGetDevice(&dev) != cudaSuccess || dev < 0 || dev >= 64) { cudaGetLastError(); return false; }
+    if (known[dev] == 0) {
+        int major = 0;
+        known[dev] = cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev) == cudaSuccess && major == 12
+                         ? 1 : 2;
+        cudaGetLastError();
+    }
+    return known[dev] == 1;
+#endif
 }
 // CUDA: the fused read only on chunks of 33+ tokens - below that cuBLAS's up GEMM takes another kernel, rounding-level
 // apart, so short chunks keep the default pair
