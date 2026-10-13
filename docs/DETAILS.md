@@ -1003,8 +1003,6 @@ print(r.choices[0].message.content)
   turn is then the same for every session and the disk prefix cache restores it. Measured (RTX 5070 Ti Laptop, Swift 1.5
   IQ3_XXS, a new opencode session in a second folder): first request 14,073 tokens with 13,693 from the cache, 1.1 s,
   against 14,753 read, 11.9 s, without it; the model still answered the folder and date correctly (3/3). Off by default.
-
-
 - **Undeclared tool names repaired (opt-in).** `"tool_name_repair": true` in `strata-<model>.json` (from
   ANBAL534's fork, 9453382a). The model sometimes names a call after the template's own block: it wraps a real call
   in `<function=tools>` (the `<tools>` block's word) or writes `tools/write_stdin` (that word as a prefix). A call
