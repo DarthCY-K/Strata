@@ -3627,7 +3627,8 @@ int main(int argc, char** argv) {
     // the GPU cache's size estimated once the weights, session and drafter are in - the arena then opens where upstream
     // opens it.
     const char* pin_need_env = std::getenv("STRATA_PIN_BY_NEED");
-    const bool pin_by_need_on = pin_need_env != nullptr && pin_need_env[0] != '\0' && pin_need_env[0] != '0';
+    const bool pin_by_need_on = pin_need_env != nullptr && pin_need_env[0] != '\0' && pin_need_env[0] != '0' &&
+                                !o.expert_profile.empty();   // (without a profile it turns itself off)
     const bool arena_async = !o.mmap_experts && !multi_gpu && o.peer_device < 0 && !remote_caches && !pin_by_need_on &&
                              std::getenv("STRATA_ARENA_SYNC") == nullptr;
     std::thread arena_thread;
@@ -5051,10 +5052,12 @@ int main(int argc, char** argv) {
                             !o.expert_profile.empty() && !o.resident_cpu_experts && o.expert_cache != 0 && !remote &&
                             strata::core::vmm_available() &&
                             // --vram-elastic's cache is not one VMM range
-                            !o.vram_elastic && o.peer_device < 0;
-            if (asked && !on && (o.kv_grow_given || (ev != nullptr && ev[0] != '\0')))
+                            !o.vram_elastic && o.peer_device < 0 &&
+                            // upstream 0.1.44's --prefill-head-alias lends from slot 1: no gap for the K/V to grow into
+                            !o.prefill_head_alias;
+            if (asked && !on && (o.kv_grow_given || (ev != nullptr && ev[0] != '\0') || o.prefill_head_alias))
                 std::fprintf(stderr, "strata generate: --kv-grow is off (one GPU, a profile, the whole K/V in VRAM, "
-                                     "every expert in RAM, no --vram-elastic or --peer-device)\n");
+                                     "every expert in RAM, no --vram-elastic, --peer-device or --prefill-head-alias)\n");
             const char* iv = std::getenv("STRATA_KV_GROW_INIT");
             strata::core::qsa_set_kv_elastic(on, iv != nullptr && std::atoll(iv) > 0 ? std::atoll(iv) : 16384);
             strata::core::ExpertCache::set_vmm(on);
@@ -9104,8 +9107,8 @@ int main(int argc, char** argv) {
                 c.max_context = o.max_context;
                 c.kv_resident = o.kv_resident;
                 c.mtp_window = o.mtp.empty() ? -1 : o.mtp_window;
-                const char* rot = std::getenv("STRATA_KV_ROT");
-                c.kv_rot = rot != nullptr && rot[0] == '1';
+                // (this fork rotates the int8 K/V by default, STRATA_KV_ROT=0 does not: the session's own state)
+                c.kv_rot = g.n_qsa_layers() > 0 && ss.qsa_states[ss.qsa_primary()].kv_rot;
                 c.rope = {(int64_t) rope_cfg.type, rope_cfg.freq_base, rope_cfg.factor, rope_cfg.freq_scale(),
                           rope_cfg.orig_ctx, rope_cfg.ext_factor, rope_cfg.attn_factor, rope_cfg.beta_fast,
                           rope_cfg.beta_slow};
@@ -13327,6 +13330,20 @@ int main(int argc, char** argv) {
                         if (need_p <= 0 || need_p + 128 > p.cache->slots()) {
                             e = "prefill: no chunk of this request fits the slots that can be lent (#2090)";
                             return false;
+                        }
+                        // This fork's elastic K/V grows down from the start-up loan's first slot (kvg.top) and holds
+                        // [kvg.lo, kvg.top), unmapped from the cache.  #2090's earlier loan start must not reach into it:
+                        // the chunk is halved until its loan starts at kvg.top or later (a grown K/V and a small card's
+                        // auto chunk near small_max; the start-up loan's own chunk always fits above kvg.top).
+                        if (kvg.on && p.cache == &xcache && kvg.lo < kvg.top) {
+                            while (p.cache->slots() - need_p < kvg.top && want_p > 256) {
+                                want_p = std::max<int64_t>(256, want_p / 2 / 256 * 256);
+                                need_p = part_slots(p, want_p);
+                            }
+                            if (need_p <= 0 || p.cache->slots() - need_p < kvg.top) {
+                                e = "prefill: no chunk of this request fits beside the grown K/V (#2090)";
+                                return false;
+                            }
                         }
                         if (want_p != want)
                             std::fprintf(stderr, "strata serve: prompt chunk %lld -> %lld tokens for this request: its "
