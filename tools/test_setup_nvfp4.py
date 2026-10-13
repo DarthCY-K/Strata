@@ -219,7 +219,7 @@ class EngineArgs(unittest.TestCase):
             "--vision"])
         self.assertIs(cfg["uncensored"], False)
         self.assertEqual(cfg["tokenizer"], f"{m}/pack/tokenizer")
-        self.assertEqual(cfg["vision"], {"exe": "<T>/engine/strata-vision" + (".exe" if setup.WIN else ""),
+        self.assertEqual(cfg["vision"], {"exe": "<T>/engine/<VEXE>",
                                          "mmproj": f"<T>/models/{setup.MMPROJ}", "model": f"{m}/dense-q8_0.gguf",
                                          "gpu": False, "max_tokens": 1024, "threads": cfg["vision"]["threads"]})
         self.assertEqual((cfg["gpu"], cfg["gpus_asked"]), (0, True))       # one card, not offered a split at start

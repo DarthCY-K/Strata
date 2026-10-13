@@ -60,7 +60,8 @@ def normalize(v, t: Path):
         return [normalize(x, t) for x in v]
     if isinstance(v, str):
         v = v.replace(str(t), "<T>").replace(str(REPO), "<REPO>")   # the repository's data/ (the uncensor vector)
-        return re.sub(rf"(?<![w.-]){re.escape(setup.EXE)}(?![w.-])", "<EXE>", v.replace("\\", "/"))   # #973: only the whole name, not "strata-x.log" on Linux
+        v = re.sub(rf"(?<![w.-]){re.escape(setup.VEXE)}(?![w.-])", "<VEXE>", v.replace("\\", "/"))   # the image encoder
+        return re.sub(rf"(?<![w.-]){re.escape(setup.EXE)}(?![w.-])", "<EXE>", v)   # #973: only the whole name, not "strata-x.log" on Linux
     return v
 
 
