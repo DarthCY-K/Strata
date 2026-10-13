@@ -775,8 +775,9 @@ def model_disks(files) -> list:
 def pip_install_command(package="psutil") -> str:
     """The command that installs `package` for the Python this server runs under (pythonw.exe -> its python.exe)."""
     exe = sys.executable or "python"
-    if os.name == "nt" and os.path.basename(exe).lower() == "pythonw.exe":
-        alt = os.path.join(os.path.dirname(exe), "python.exe")
+    import ntpath                                       # (os.path on Windows; also when a test sets os.name)
+    if os.name == "nt" and ntpath.basename(exe).lower() == "pythonw.exe":
+        alt = ntpath.join(ntpath.dirname(exe), "python.exe")
         exe = alt if os.path.exists(alt) else exe
     return f'{exe if " " not in exe else chr(34) + exe + chr(34)} -m pip install {package}'
 
