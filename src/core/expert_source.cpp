@@ -4475,7 +4475,10 @@ void expert_pool_dispatch_multi(ExpertDispatch& d, const float* x_f, const int32
             for (int q = 0; q < nd; ++q) {
                 pick[q] = false;
                 const int32_t e = ids[distinct[q]];   // a tail-skipped miss is not fetched
-                if (!skip_d[q] && e >= 0 && e < d.n_expert && d.host_res[(size_t) d.layers * (size_t) d.n_expert + (size_t) e] < 0) mq[nm++] = q;
+                // (an unpinned blob cannot be fetched: under upstream's STRATA_PIN_BY_NEED a PCIe layer is pinned in part)
+                if (!skip_d[q] && e >= 0 && e < d.n_expert && d.host_res[(size_t) d.layers * (size_t) d.n_expert + (size_t) e] < 0 &&
+                    d.src->pinned(d.layers, e))
+                    mq[nm++] = q;
             }
             std::stable_sort(mq, mq + nm, [&](int a, int b) { return use[ids[distinct[a]]] > use[ids[distinct[b]]]; });
             for (int j = 0; j < m && j < nm; ++j) pick[mq[j]] = true;
