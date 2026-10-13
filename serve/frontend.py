@@ -839,10 +839,36 @@ def json_tool_call(body: str, schemas: dict) -> ToolCall | None:
     return ToolCall(name=obj["name"], arguments=args) if isinstance(args, dict) else None
 
 
+PY_BOOLS = {"True": True, "False": False}
+
+
+def bool_allowed(spec) -> bool:
+    """A parameter's schema lets a Python-style `True` / `False` be its boolean: it declares "boolean" (alone, in a
+    type list, or in an anyOf / oneOf branch) or declares no type at all.  A declared string, number, object, ...
+    keeps the text."""
+    if not isinstance(spec, dict):
+        return True
+    t = spec.get("type")
+    if t is None:
+        branches = [b for k in ("anyOf", "oneOf") for b in spec.get(k) or [] if isinstance(b, dict)]
+        return not branches or any(bool_allowed(b) for b in branches)
+    return t == "boolean" or (isinstance(t, list) and "boolean" in t)
+
+
+def raw_value(value: str, spec):
+    """A non-string parameter's text -> its value: JSON, or (jarydkrish 2b111433) Qwen's Python-style `True` /
+    `False` as the boolean where the schema allows one; anything else stays the text."""
+    try:
+        return json.loads(value)
+    except ValueError:
+        v = value.strip()
+        return PY_BOOLS[v] if v in PY_BOOLS and bool_allowed(spec) else value
+
+
 def parse_tool_call(body: str, schema: dict | None = None) -> ToolCall:
     """`<function=NAME>\\n<parameter=P>\\nVALUE\\n</parameter>...</function>` -> ToolCall. Values are JSON-decoded
     when the tool's schema says the parameter is not a string (or, without a schema, when they parse as JSON
-    objects/arrays/numbers/booleans)."""
+    objects/arrays/numbers/booleans); `True` / `False` are booleans where the schema allows one (raw_value)."""
     body = body.strip()
     if not body.startswith("<function=") or ">" not in body:
         raise ValueError("malformed tool call: " + body[:80])
@@ -865,10 +891,7 @@ def parse_tool_call(body: str, schema: dict | None = None) -> ToolCall:
         if declared == "string":
             args[pname] = value
         else:
-            try:
-                args[pname] = json.loads(value)
-            except ValueError:
-                args[pname] = value
+            args[pname] = raw_value(value, props.get(pname))
     return ToolCall(name=name, arguments=args)
 
 
@@ -1051,6 +1074,8 @@ class OutputParser:
         self.sfirst = True
         self.sval_started = False
         self.sdeclared = {}
+        self.sspecs = {}             # the tool's parameter schemas (raw_value: where `True` / `False` is a boolean)
+        self.sparam = None           # the parameter being streamed
 
     def _wrapped_call_end(self) -> int:
         # Without a closing tag the structural walk cannot finish. Search only
@@ -1084,6 +1109,7 @@ class OutputParser:
                 self.scall = ToolCall(name=name, arguments={})
                 props = ((self.schemas.get(name) or {}).get("parameters") or {}).get("properties") or {}
                 self.sdeclared = {k: (v or {}).get("type") for k, v in props.items()}
+                self.sspecs = props
                 out.append(Event("tool_start", call=self.scall))
                 args("{")
                 self.sp += b + 1
@@ -1096,6 +1122,7 @@ class OutputParser:
                     if b < 0:
                         return out
                     pname = stripped[11:b]
+                    self.sparam = pname
                     args(("" if self.sfirst else ",") + json.dumps(pname) + ":")
                     self.sfirst = False
                     self.sp += b + 1
@@ -1144,10 +1171,7 @@ class OutputParser:
                     value = value[1:]
                 if value.endswith("\n"):
                     value = value[:-1]
-                try:
-                    v = json.loads(value)
-                except ValueError:
-                    v = value
+                v = raw_value(value, self.sspecs.get(self.sparam))
                 args(json.dumps(v, ensure_ascii=False))
                 self.sp += end + len(PARAM_END)
                 self.ss = "between"
