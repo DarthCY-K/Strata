@@ -237,6 +237,17 @@ that overlap instead of one, a 32K one four instead of two. Same tokens; 2x / 3x
 32K +18% / +21% / +29%, 64K +4% / +12% / +17%, 8K unchanged. `STRATA_SPLIT_CHUNK16K=1` keeps 16384.) Conversation checkpoints save and restore every card's state; the adaptive expert swaps copy
 into the card that owns the layer.
 
+The web page's Monitor tab has a **GPUs** card with one row per card of the PC: the engine's device number for it
+(CUDA0, ...), what it does (a stage and its layers with its expert cache, the peer tier, a helper cache, the image
+encoder, or nothing), its load, VRAM, temperature and power, and its PCIe link against the best the slot gives (a
+link under x8, narrower than the slot's, or a slower generation under load is marked; an idle card drops to Gen1 to
+save power, so that alone is not). The roles and each card's measured link come from the engine's start-up lines in
+its log; the cards are matched to the engine's devices by PCI bus id from its `CUDA_VISIBLE_DEVICES` and
+`CUDA_DEVICE_ORDER`. `/metrics` has the same under `"gpus"`, `/v1/status` under `machine.gpus`.
+`STRATA_GPU_POLL_S` sets how often the server reads the cards (default 1 s; 0 = never: the NVML query that #905 found
+stalling CUDA-graph branches on Linux). `STRATA_MOCK_GPUS=4` (or a fixture such as `gpus-mixed-roles.json` in
+`serve/fixtures`) shows fake cards, to check the page without them.
+
 ## Overlapped hand-off (`STRATA_SPLIT_OVERLAP=1`, opt-in)
 
 By default each verify window runs the stages one after another: the host syncs stage 1, then stages and launches
