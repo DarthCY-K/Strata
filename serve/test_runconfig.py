@@ -17,7 +17,7 @@ from pathlib import Path
 
 from serve import runconfig
 from serve.frontend import ChatTemplate
-from serve.server import ByteTokenizer, MockEngine, Service, serve
+from serve.server import ByteTokenizer, MockEngine, Service, engine_args, serve
 
 ROOT = Path(__file__).resolve().parents[1]
 CFG = {"exe": "engine/strata.exe", "args": ["--pack", "data/packs/q2_0", "--kv", "int8", "--spec-min-p", "0.5"],
@@ -76,6 +76,14 @@ class Apply(unittest.TestCase):
         self.assertNotIn("api_key", got)
         self.assertNotIn("mcp_servers", got)
 
+    def test_sections_and_the_grid(self):
+        keys = runconfig.view(CFG, "x/strata-q2_0.json")["keys"]
+        self.assertEqual(keys[0]["section"], "Sampling defaults")
+        self.assertEqual(sum("section" in k for k in keys), len(runconfig.SECTIONS))
+        css = (ROOT / "serve" / "web" / "app.css").read_text(encoding="utf-8")
+        rule = css[css.index(".cfg-form {"):].split("}", 1)[0]
+        self.assertNotIn("max-content", rule)   # a long help took the whole row and pushed the controls out of the card
+
 
 class Uncensored(unittest.TestCase):
     """The censorship switch's default ("uncensored", 0.1.41-nvfp4.7): settable where setup loaded the refusal
@@ -123,6 +131,145 @@ class Uncensored(unittest.TestCase):
     def test_the_page_renders_it_like_the_other_bools(self):
         js = (ROOT / "serve" / "web" / "app.js").read_text(encoding="utf-8")
         self.assertIn('k.available === false ? " disabled" : ""', js)    # a model without the projection: greyed out
+
+
+class Dialogs(unittest.TestCase):
+    """Kept dialogs: the conversation cache (--conversation-cache-slots / -mib) and its disk tier (--conversation-disk-dir,
+    -mib, --conversation-disk-persist without a value), each set and cleared alone, and refused without what they need."""
+    ON = {"conversation_cache_slots": 8, "conversation_cache_mib": 16384, "conversation_disk_dir": "D:/strata dialogs",
+          "conversation_disk_mib": 131072, "conversation_disk_persist": True}
+
+    def test_on_and_off(self):
+        new, changed = runconfig.apply(CFG, self.ON)
+        self.assertEqual(changed, list(self.ON))
+        self.assertEqual(new["args"][len(CFG["args"]):],
+                         ["--conversation-cache-slots", "8", "--conversation-cache-mib", "16384",
+                          "--conversation-disk-dir", "D:/strata dialogs", "--conversation-disk-mib", "131072",
+                          "--conversation-disk-persist"])
+        got = {k["key"]: k for k in runconfig.view(new, "x.json")["keys"]}
+        self.assertEqual({k: got[k]["value"] for k in self.ON}, self.ON)
+        self.assertEqual([got[k]["kind"] for k in self.ON], ["number", "number", "text", "number", "bool"])
+        self.assertEqual(got["conversation_cache_mib"]["default"], "off")   # the empty field's meaning
+        again, changed = runconfig.apply(new, self.ON)                   # the same values: nothing changes
+        self.assertEqual((again, changed), (new, []))
+        off, changed = runconfig.apply(new, {k: None for k in self.ON})
+        self.assertEqual((off["args"], changed), (CFG["args"], list(self.ON)))
+        off, _ = runconfig.apply(new, {"conversation_disk_persist": False})   # off = the option left out
+        self.assertNotIn("--conversation-disk-persist", off["args"])
+        self.assertIn("--conversation-disk-dir", off["args"])
+
+    def test_a_folder_named_by_digits_stays_text(self):
+        new, _ = runconfig.apply(CFG, {"conversation_cache_mib": 4096, "conversation_disk_dir": "2026"})
+        self.assertEqual(runconfig.value_of(new, "conversation_disk_dir"), "2026")
+
+    def test_refused_without_what_they_need(self):
+        for changes, says in (({"conversation_cache_slots": 8}, "conversation_cache_mib"),
+                              ({"conversation_disk_dir": "D:/d"}, "conversation_cache_mib"),
+                              ({"conversation_cache_mib": 0, "conversation_disk_dir": "D:/d"}, "conversation_cache_mib"),
+                              ({"conversation_cache_mib": 4096, "conversation_disk_persist": True}, "conversation_disk_dir"),
+                              ({"conversation_cache_mib": 4096, "conversation_disk_mib": 1024}, "conversation_disk_dir"),
+                              ({"conversation_disk_persist": "yes"}, "true or false"),
+                              ({"conversation_disk_dir": "a\nb"}, "folder"), ({"conversation_disk_dir": " "}, "folder"),
+                              ({"conversation_cache_mib": -1}, "at least 0")):
+            with self.subTest(changes=changes), self.assertRaises(ValueError) as e:
+                runconfig.apply(CFG, changes)
+            self.assertIn(says, str(e.exception))
+        new, _ = runconfig.apply(CFG, self.ON)
+        with self.assertRaises(ValueError):                              # the RAM goes, the disk would stay unused
+            runconfig.apply(new, {"conversation_cache_mib": None})
+
+
+class Parallel(unittest.TestCase):
+    """Dialogs at once ("parallel" -> --batch N): a list of 1-8, empty = the engine's one at a time; the choice that is
+    one dialog per GPU says so (never chosen for the user); greyed out where the args set --batch themselves."""
+    def test_choices_name_one_per_gpu(self):
+        for gpu, per in ((None, 1), (0, 1), ([0, 1], 2), ("0,1,2,3", 4)):
+            cfg = {**CFG, **({} if gpu is None else {"gpu": gpu})}
+            got = {k["key"]: k for k in runconfig.view(cfg, "x.json")["keys"]}["parallel"]
+            self.assertEqual((got["kind"], got["value"], got["section"]), ("choice", None, "Dialogs"))
+            self.assertEqual([n for n, _ in got["choices"]], list(range(1, 9)))
+            marked = [n for n, label in got["choices"] if "1 per GPU" in label]
+            self.assertEqual(marked, [per], gpu)
+            self.assertIn("1 at a time", got["default"])
+            self.assertIn("95.6", got["help"])                          # the 2-GPU split's cost is said
+            self.assertNotIn("available", got)
+
+    def test_set_and_cleared(self):
+        new, changed = runconfig.apply(CFG, {"parallel": 2})
+        self.assertEqual((changed, new["parallel"], new["args"]), (["parallel"], 2, CFG["args"]))
+        self.assertEqual(engine_args({**new, "args": list(new["args"])})[-2:], ["--batch", "2"])
+        one, _ = runconfig.apply(new, {"parallel": 1})
+        self.assertNotIn("--batch", engine_args(one))                   # 1: one at a time, as the default
+        off, changed = runconfig.apply(new, {"parallel": None})
+        self.assertEqual((changed, "parallel" in off), (["parallel"], False))
+        for bad in (0, 9, 1.5, True, "2"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                runconfig.apply(CFG, {"parallel": bad})
+
+    def test_a_hand_written_value_is_shown(self):
+        got = {k["key"]: k for k in runconfig.view({**CFG, "parallel": 12}, "x.json")["keys"]}["parallel"]
+        self.assertEqual((got["value"], got["choices"][-1][0]), (12, 12))
+
+    def test_greyed_out_under_batch_in_the_args(self):
+        got = {k["key"]: k for k in runconfig.view({**CFG, "args": CFG["args"] + ["--batch", "4"]},
+                                                   "x.json")["keys"]}["parallel"]
+        self.assertIs(got["available"], False)
+        self.assertIn("--batch", got["help"])
+
+
+class Context(unittest.TestCase):
+    """--max-context as setup's sizes, never empty; past the trained 262144 the RoPE extension setup writes (yarn unless
+    linear is picked, the factor context / 262144), taken out again within it; none past it refused, as by setup."""
+    BASE = {**CFG, "args": CFG["args"] + ["--max-context", "262144"]}
+
+    def rope(self, cfg):
+        a = cfg["args"]
+        return tuple(a[a.index(f) + 1] if f in a else None for f in ("--max-context", "--rope-scaling", "--rope-scale"))
+
+    def test_past_the_trained_context_and_back(self):
+        new, changed = runconfig.apply(self.BASE, {"max_context": 524288})
+        self.assertEqual((changed, self.rope(new)), (["max_context", "rope_scaling"], ("524288", "yarn", "2")))
+        new, changed = runconfig.apply(new, {"max_context": 393216})
+        self.assertEqual((changed, self.rope(new)), (["max_context"], ("393216", "yarn", "1.5")))
+        new, changed = runconfig.apply(new, {"rope_scaling": "linear"})
+        self.assertEqual((changed, self.rope(new)), (["rope_scaling"], ("393216", "linear", "1.5")))
+        new, changed = runconfig.apply(new, {"rope_scaling": None})     # the default past 262144: yarn again
+        self.assertEqual((changed, self.rope(new)), (["rope_scaling"], ("393216", "yarn", "1.5")))
+        new, changed = runconfig.apply(new, {"max_context": 131072})
+        self.assertEqual((changed, self.rope(new)), (["max_context", "rope_scaling"], ("131072", None, None)))
+        self.assertEqual(new["args"][:len(CFG["args"])], CFG["args"])    # the other args stay
+        both, changed = runconfig.apply(self.BASE, {"max_context": 524288, "rope_scaling": "linear"})
+        self.assertEqual((changed, self.rope(both)), (["max_context", "rope_scaling"], ("524288", "linear", "2")))
+
+    def test_view(self):
+        new, _ = runconfig.apply(self.BASE, {"max_context": 524288})
+        got = {k["key"]: k for k in runconfig.view(new, "x.json")["keys"]}
+        ctx, rope = got["max_context"], got["rope_scaling"]
+        self.assertEqual((ctx["kind"], ctx["value"], ctx["required"], ctx["section"]), ("choice", 524288, True, "Context"))
+        self.assertEqual([n for n, _ in ctx["choices"]], runconfig.CONTEXTS)
+        self.assertIn("trained", dict(ctx["choices"])[262144])
+        self.assertIn("RoPE", dict(ctx["choices"])[524288])
+        self.assertEqual((rope["kind"], rope["value"], rope["choices"]), ("enum", "yarn", ["yarn", "linear"]))
+        self.assertIn("now: yarn, factor 2", rope["help"])
+        odd = {k["key"]: k for k in runconfig.view({**CFG, "args": ["--max-context", "100000"]}, "x")["keys"]}
+        self.assertIn(100000, [n for n, _ in odd["max_context"]["choices"]])   # the file's own size is listed
+
+    def test_refused(self):
+        for changes, says in (({"max_context": None}, "4096"), ({"max_context": 512}, "at least 1024"),
+                              ({"max_context": 4 * 262144 + 1}, "at most 1048576"), ({"max_context": "262144"}, "whole"),
+                              ({"rope_scaling": "yarn"}, "nothing to extend"), ({"rope_scaling": "none"}, "yarn or linear")):
+            with self.subTest(changes=changes), self.assertRaises(ValueError) as e:
+                runconfig.apply(self.BASE, changes)
+            self.assertIn(says, str(e.exception))
+        hand = {**CFG, "args": ["--max-context", "262144", "--rope-scaling", "none"]}
+        with self.assertRaises(ValueError) as e:                          # none past 262144, as setup refuses it
+            runconfig.apply(hand, {"max_context": 524288})
+        self.assertIn("pick yarn or linear", str(e.exception))
+        self.assertEqual(runconfig.apply(hand, {"fit_max_tokens": True})[0]["args"], hand["args"])   # left alone
+
+    def test_the_page_keeps_a_required_choice(self):
+        js = (ROOT / "serve" / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("k.required && v != null", js)                       # no empty choice for the context
 
 
 class Http(unittest.TestCase):
