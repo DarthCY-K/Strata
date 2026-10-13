@@ -196,6 +196,13 @@ page).
 
 ## Requirements
 
+- **System: Windows 10/11 or Linux, run natively. Not WSL2.** Under WSL2 the NVIDIA driver page-locks only about 1 GB
+  of RAM ([NVIDIA's known limitation](https://docs.nvidia.com/cuda/wsl-user-guide/index.html#known-limitations-for-linux-cuda-applications):
+  "pinned system memory ... availability for applications is limited"), and this fork needs page-locked RAM for the
+  experts' RAM copy, for the GPU's reads of missed experts over PCIe, for KV streaming and for a layer split's
+  hand-offs. Under WSL2 none of that can be pinned: the KV cache must stay in VRAM, every miss goes to the CPU, and a
+  two-GPU layer split does not start ([#7](https://github.com/sergqwer/strata-nvfp4/issues/7)). On a Windows PC run
+  `START-HERE.bat` in Windows itself.
 - **GPU:** an NVIDIA RTX 20, 30, 40 or 50 card with 12 GB of VRAM or more, driver 580 or newer (CUDA 13). The
   release engine has code for sm_75, 86, 89 and 120, and the optional FP4 x FP4 prompt unit for 120a (RTX 50); the
   other cards read prompts on int8 tensor cores instead. The dense weights, the draft head and the K/V come first and
@@ -430,6 +437,7 @@ the end of those lines ([Upstream 0.1.41](docs/NVFP4.md#upstream-0141-2026-10-08
   (`STRATA_EMULATE_CC`, `--vram-reserve-mib`, a RAM ballast, `STRATA_FORCE_AVX2=1`, `--pool-workers`), not on the
   real hardware.
 - The NVFP4 model runs on one GPU: the low-RAM mode and the growing K/V are one-GPU.
+- Not for WSL2: the driver there page-locks only about 1 GB of RAM ([Requirements](#requirements)).
 - The low-RAM mode's unbuffered reads are Windows-only; elsewhere it reads through the page cache.
 - Decode is bound by host RAM bandwidth: the CPU pool and the PCIe share read the same DDR5 (~84 of ~90 GB/s here).
   More VRAM for the expert cache or faster RAM is what moves it
