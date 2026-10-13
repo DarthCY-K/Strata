@@ -1002,7 +1002,8 @@ class StrataEngine:
             pin["preexec_fn"] = lambda: os.sched_setaffinity(0, cpus)
         end_leftover_engines(exe)                        # one an earlier run lost still holds the GPU and the memory
         # --conversation-disk-persist: at QUIT the engine first writes its conversations to the disk (GBs)
-        self.quit_s = max(300, ENGINE_QUIT_WAIT_S) if "--conversation-disk-persist" in args else ENGINE_QUIT_WAIT_S
+        self.quit_s = (max(300, ENGINE_QUIT_WAIT_S)
+                       if ("--conversation-disk-persist" in args or "--conversation-disk-shared" in args) else ENGINE_QUIT_WAIT_S)
         spawned_at = time.monotonic()
         self.proc = popen("the Strata engine", [exe, "--serve", *args], cwd=cwd, stdin=subprocess.PIPE,
                           stdout=subprocess.PIPE, stderr=self.log, text=True, encoding="utf-8", bufsize=1, env=env, **pin)
@@ -7748,7 +7749,13 @@ def start_replicas(cfg: dict, groups: list[list[int]], exe: str, effort_end: lis
         i, e = errors[0]
         raise SystemExit(f"[strata] replica {i} did not start: {e}")
     load = int(cfg.get("replica_load_tokens") or rp.LOAD_TOKENS)
-    return rp.ReplicaEngine(engines, load_tokens=load)
+    # --conversation-disk-shared (strata-nvfp4): the replicas park into one pool, so a conversation one of them parked
+    # costs any of them only its restore (serve/replicas.py, Router pool)
+    shared = "--conversation-disk-shared" in engine_args(rc0)
+    if shared:
+        print("[strata] the replicas share one conversation pool (--conversation-disk-shared): a parked conversation "
+              "resumes on the first free replica", flush=True)
+    return rp.ReplicaEngine(engines, load_tokens=load, shared_pool=shared)
 
 
 def check_request_sampling(req) -> None:
