@@ -1,7 +1,9 @@
-"""Tests for setup.py's Unsloth choices (docs/UNSLOTH_Q4.md): UD-IQ4_XS (regular from 0.1.39) and the experimental
-UD-Q4_K_XL: the four pinned shards with
+"""Tests for setup.py's Unsloth choices (docs/UNSLOTH_Q4.md): UD-IQ4_XS (regular from 0.1.39), UD-Q3_K_XL
+(0.1.42-nvfp4.2) and the experimental UD-Q4_K_XL: the four pinned shards with
 their sizes and SHA-256, the RAM budget from the PC's RAM, the pack with --compat-bf16 (never experts.bin), the
-engine version it needs, one GPU, no images.  Mocked - no GPU, no downloads, nothing written outside a temp folder.
+engine version it needs, one GPU, no images.  0.1.42-nvfp4.2: every expert in RAM where they fit with 16 GiB more
+(Resident), the RAM budget below that - the budget tests force it (budget_mode) where their PC would now fit them.
+Mocked - no GPU, no downloads, nothing written outside a temp folder.
 
     python -m unittest tools.test_setup_unsloth
 """
@@ -457,7 +459,7 @@ class IQ4XS(Base):
         self.assertAlmostEqual(setup.MODELS[X]["download_gb"], 93682584224 / 1e9, places=1)
         self.assertEqual(setup.MODELS[X]["families"], ("unsloth",))
         self.assertEqual([m for m in setup.MODELS if "unsloth" in setup.MODELS[m].get("families", ())],
-                         [X, M, "UD-Q5_K_XL", "UD-Q6_K_XL", "Q8_0"])
+                         [X, "UD-Q3_K_XL", M, "UD-Q5_K_XL", "UD-Q6_K_XL", "Q8_0"])
         self.assertIsNone(setup.gguf_unsupported(names[0]))                    # #444: a file setup runs now
         self.assertEqual(setup.gguf_choice(names[0]), ("unsloth", X))
         self.assertEqual(setup.budget_model({"args": ["--native", "/m/" + names[0]]}), X)
@@ -501,22 +503,23 @@ class IQ4XS(Base):
             self.assertEqual((ch["family"], ch["model"]), ("unsloth", X))
 
     def test_family_default_and_menus(self):
-        """The first menu lists the Unsloth family without [experimental]; its size menu lists the five files by size,
-        UD-IQ4_XS first (the default on 64 GB, Enter), none marked EXPERIMENTAL; --model names are unchanged."""
+        """The first menu lists the Unsloth family without [experimental]; its size menu lists the six files,
+        UD-IQ4_XS first and this fork's UD-Q3_K_XL second, none marked EXPERIMENTAL (UD-Q4_K_XL the default on 64 GB,
+        Enter); --model names are unchanged."""
         code, out, cfg = self.main(["--context", "8192", "--vision", "no"], version="0.1.38", model=False,
                                    family=False, answers={"Which model": "4"}, m=M)
         self.assertEqual(code, 0, out)
         fam_line = next(ln for ln in out.splitlines() if ln.startswith("  4) "))
         self.assertIn("Qwen3.8-Flash-Next (Unsloth)", fam_line)
-        self.assertIn("UD-IQ4_XS, UD-Q4_K_XL, UD-Q5_K_XL, UD-Q6_K_XL or Q8_0 (94 to 188 GB downloads)", fam_line)
+        self.assertIn("UD-Q3_K_XL, UD-IQ4_XS, UD-Q4_K_XL, UD-Q5_K_XL, UD-Q6_K_XL or Q8_0 (90 to 188 GB downloads)", fam_line)
         self.assertNotIn("[experimental]", out)
         size_lines = [ln for ln in out.splitlines()
-                      if any(ln.startswith(f"  {i}) {m} ") for i in range(1, 6) for m in setup.MODELS)]
-        self.assertEqual(len(size_lines), 5, out)
-        for i, (line, m) in enumerate(zip(size_lines, (X, M, "UD-Q5_K_XL", "UD-Q6_K_XL", "Q8_0")), 1):
+                      if any(ln.startswith(f"  {i}) {m} ") for i in range(1, 7) for m in setup.MODELS)]
+        self.assertEqual(len(size_lines), 6, out)
+        for i, (line, m) in enumerate(zip(size_lines, (X, "UD-Q3_K_XL", M, "UD-Q5_K_XL", "UD-Q6_K_XL", "Q8_0")), 1):
             self.assertTrue(line.startswith(f"  {i}) {m} "), line)
             self.assertNotIn("EXPERIMENTAL", line)
-        self.assertTrue(any("Which size" in q and "[2]" in q for q in self.asked), self.asked)
+        self.assertTrue(any("Which size" in q and "[3]" in q for q in self.asked), self.asked)
         self.assertEqual(cfg["model_name"], "qwen3.8-flash-next-unsloth-ud-q4_k_xl")
         code, out, cfg = self.main(["--context", "8192"], version="0.1.38", model=False, m=M)   # --yes: same default
         self.assertEqual(code, 0, out)
@@ -568,6 +571,148 @@ class IQ4XS(Base):
             code, out, cfg = self.main(["--context", "8192", "--backend", "hip"], version="0.1.38", amd=r9700, m=X)
         self.assertNotIn("has not been run on AMD cards yet", out)
         self.assertIn("RAM budget: 40 GiB of UD-IQ4_XS's experts", out)
+
+
+Q3 = "UD-Q3_K_XL"
+
+
+class Resident(Base):
+    """0.1.42-nvfp4.2: every expert of an Unsloth file in RAM (a pinned arena, no --resident-budget-gib) where they fit
+    with UNSLOTH_RESIDENT_BESIDE_GB more - measured on 128 GB: UD-Q4_K_XL 169 tokens/s and a 4.9 s 32K prompt in the
+    arena against 118 and 30 s in the budget mode; the budget below that (a 64 GB PC), when asked for, and on a
+    unified-memory APU."""
+
+    def test_the_rule(self):
+        self.assertEqual(setup.UNSLOTH_RESIDENT_BESIDE_GB, 16)
+        need = {m: setup.MODELS[m]["arena_gb"] / 1.073741824 + 16 for m in (M, X, Q3)}
+        self.assertEqual({m: round(v, 1) for m, v in need.items()}, {M: 87.7, X: 71.4, Q3: 68.0})
+        for ram, budget in ((63.7, {M, X, Q3}), (80.0, {M}), (93.4, set()), (127.2, set())):
+            for m in (M, X, Q3):
+                self.assertEqual(setup.unsloth_budget(m, ram), m in budget, (m, ram))
+        uma = {"uma": True}
+        self.assertTrue(setup.unsloth_budget(X, 124.0, uma))                 # #1715: measured on a discrete card only
+        self.assertTrue(setup.unsloth_budget(M, 127.2, None, 40))             # --resident-budget-gib: asked for
+        self.assertFalse(setup.unsloth_budget(M, 127.2, {"uma": False}))
+
+    def test_install_at_128_gb(self):
+        for m, ver in ((M, "0.1.32"), (X, "0.1.38"), (Q3, "0.1.38")):
+            with self.subTest(m):
+                code, out, cfg = self.main(["--context", "131072"], ram=127.2, version=ver, m=m)
+                self.assertEqual(code, 0, out)
+                args = cfg["args"]
+                for flag in ("--resident-budget-gib", "--mmap-experts", "--resident-experts", "--low-ram"):
+                    self.assertNotIn(flag, args)
+                self.assertIn(f"all of {m}'s experts", out)
+                self.assertNotIn("RAM budget:", out)
+                self.assertIn("--kv-resident", args)                          # the measured 131072 + KV streaming
+                self.assertEqual(args[args.index("--max-context") + 1], "131072")
+                self.assertNotIn("most of its experts are read from the SSD while it answers", out)
+
+    def test_recommended_context_is_the_gguf_models(self):
+        """Not the budget mode's 8192 / 32768: every GB of KV is no longer a GB fewer cached experts in RAM."""
+        code, out, cfg = self.main([], ram=127.2, version="0.1.38", m=Q3)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(cfg["args"][cfg["args"].index("--max-context") + 1], "32768")   # a 12 GB card's
+
+    def test_the_menu_and_check_say_so(self):
+        code, out, cfg = self.main(["--context", "8192"], ram=127.2, version="0.1.38", model=False, m=X)
+        self.assertEqual(code, 0, out)
+        for line in (ln for ln in out.splitlines() if ln.startswith(("  1) UD-", "  2) UD-", "  3) UD-"))):
+            self.assertIn("keeps all of its", line)
+        code, out, _ = self.main(["--check"], ram=127.2, m=X)
+        for m in (M, X, Q3):
+            line = next(ln for ln in out.splitlines() if ln.strip().startswith(m))
+            self.assertIn("fits (all of its experts in RAM)", line)
+        code, out, _ = self.main(["--check"], ram=63.7, m=X)
+        for m in (M, X, Q3):
+            line = next(ln for ln in out.splitlines() if ln.strip().startswith(m))
+            self.assertIn("fits with 40 GiB of its experts in RAM", line)
+
+    def test_64_gb_keeps_the_budget(self):
+        for m, ver in ((M, "0.1.32"), (X, "0.1.38"), (Q3, "0.1.38")):
+            with self.subTest(m):
+                code, out, cfg = self.main(["--context", "8192"], ram=63.7, version=ver, m=m)
+                self.assertEqual(code, 0, out)
+                self.assertEqual(cfg["args"][cfg["args"].index("--resident-budget-gib") + 1], "40")
+                self.assertIn(f"RAM budget: 40 GiB of {m}'s experts in RAM", out)
+
+    def test_an_asked_budget_is_kept(self):
+        code, out, cfg = self.main(["--context", "8192", "--resident-budget-gib", "40"], ram=127.2)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(cfg["args"][cfg["args"].index("--resident-budget-gib") + 1], "40")
+        self.assertNotIn(f"all of {M}'s experts", out)
+
+    def test_two_gpus_split_with_every_expert_in_ram(self):
+        """Where the experts fit, two cards are the GGUF models' layer split (no budget question, no #498 note)."""
+        code, out, cfg = self.main(["--context", "8192"], n_gpus=2, ram=127.2)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(cfg["gpu"], [0, 1])
+        self.assertEqual(cfg["layer_split"], "auto")
+        self.assertNotIn("--resident-budget-gib", cfg["args"])
+        self.assertNotIn("which GPUs?", out)
+
+
+class Q3KXL(Base):
+    """0.1.42-nvfp4.2: Unsloth's UD-Q3_K_XL - three pinned shards (the same files at 766911a6), packed and run as
+    UD-IQ4_XS (i-quants: IQ3_XXS / IQ4_NL / IQ4_XS / Q8_0), images allowed with the untested note."""
+
+    def test_pins(self):
+        fam = setup.FAMILIES["unsloth"]
+        names = [setup.model_file(fam, Q3, i) for i in range(1, setup.model_shards(fam, Q3) + 1)]
+        self.assertEqual(names, list(setup.UNSLOTH_Q3_K_XL_SHARDS))
+        self.assertEqual(setup.UNSLOTH_Q3_K_XL_SHARDS, {
+            "Qwen3.8-Flash-Next-UD-Q3_K_XL-00001-of-00003.gguf":
+                (10946624, "f2ef4328929d8b8c8930e2856eef52128dd4ce3425302f04bc3c657431cc4c49"),
+            "Qwen3.8-Flash-Next-UD-Q3_K_XL-00002-of-00003.gguf":
+                (49983253824, "7d230e7c9421d868b89eebaf23033af0ea1a4e046956df00fb156814fb62346e"),
+            "Qwen3.8-Flash-Next-UD-Q3_K_XL-00003-of-00003.gguf":
+                (39992153376, "21d4f90f9cd7b7c3a1582667c20cb22f7b03de895b88a23bb20aaeaa44f2c199")})
+        for n, v in setup.UNSLOTH_Q3_K_XL_SHARDS.items():
+            self.assertEqual(fam["sha256"][n], v)
+        self.assertAlmostEqual(setup.MODELS[Q3]["download_gb"],
+                               sum(b for b, _ in setup.UNSLOTH_Q3_K_XL_SHARDS.values()) / 1e9, places=1)
+        self.assertAlmostEqual(setup.MODELS[Q3]["arena_gb"] / 1.073741824, 51.99, places=1)   # 55.82 GB measured
+        self.assertEqual(setup.MODELS[Q3]["families"], ("unsloth",))
+        self.assertIsNone(setup.gguf_unsupported(names[0]))
+        self.assertEqual(setup.gguf_choice(names[0]), ("unsloth", Q3))
+        self.assertEqual(setup.budget_model({"args": ["--native", "/m/" + names[0]]}), Q3)
+        self.assertIn("UD-Q3_K_XL", setup.SUPPORTED_GGUFS)
+
+    def test_install_64_gb(self):
+        code, out, cfg = self.main(["--context", "8192"], version="0.1.38", m=Q3)
+        self.assertEqual(code, 0, out)
+        base = f"https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/resolve/{REV}/UD-Q3_K_XL/"
+        self.assertEqual(self.downloads, [base + n for n in setup.UNSLOTH_Q3_K_XL_SHARDS])
+        self.assertEqual(self.verified, [(n, *v) for n, v in setup.UNSLOTH_Q3_K_XL_SHARDS.items()])
+        packs = [r for r in self.runs if r[1].endswith("iq_pack.py")]
+        self.assertEqual(len(packs), 1, self.runs)
+        self.assertIn("--compat-bf16", packs[0])
+        self.assertNotIn("--experts-bin", packs[0])
+        args = cfg["args"]
+        self.assertEqual(args[args.index("--resident-budget-gib") + 1], "40")
+        self.assertTrue(args[args.index("--native") + 1].endswith("UD-Q3_K_XL-00001-of-00003.gguf"))
+        self.assertNotIn("--ple-gguf", args)
+        self.assertEqual(cfg["model_name"], "qwen3.8-flash-next-unsloth-ud-q3_k_xl")
+        self.assertIs(cfg["uncensored"], False)                                # the switch: loaded, off
+        self.assertTrue(args[args.index("--control-vector-scaled") + 1].replace("\\", "/").endswith(
+            "/data/uncensor/qwen-nvfp4-gptq-uncensored.gguf:1.0"))
+        with tempfile.TemporaryDirectory() as t:
+            p = Path(t) / "strata-unsloth-ud-q3_k_xl.json"
+            p.write_text(json.dumps(cfg))
+            ch = setup.choices_from_config(p)
+            self.assertEqual((ch["family"], ch["model"]), ("unsloth", Q3))
+
+    def test_engine_0138(self):
+        code, out, cfg = self.main(["--context", "8192"], version="0.1.37", m=Q3)
+        self.assertEqual(code, 1)
+        self.assertIn("needs engine 0.1.38 or newer; this one is 0.1.37", out)
+        self.assertEqual(self.downloads, [])
+
+    def test_images_with_the_untested_note(self):
+        code, out, cfg = self.main(["--context", "8192", "--vision", "yes"], ram=127.2, version="0.1.38", m=Q3)
+        self.assertEqual(code, 0, out)
+        self.assertIn("images with UD-Q3_K_XL are untested", out)
+        self.assertTrue(cfg["vision"]["model"].endswith("UD-Q3_K_XL-00001-of-00003.gguf"))
 
 
 class StrixHaloCache(Base):
