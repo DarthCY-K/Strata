@@ -545,6 +545,7 @@ struct Options {
     /// --no-low-ram, 1 --low-ram / --ram-budget.  On, it is --mmap-experts with --resident-budget-gib (the --ram-budget,
     /// else the available RAM less 6 GiB; 10 when the pack's size turned it on).
     int low_ram = -1;
+    bool low_ram_on = false;   ///< the low-RAM mode is on (by low_ram or by the auto rule)
     /// R4: slots of VRAM-resident experts.  **0 = off, and off is the default.**
     /// **THE COMMENT THAT USED TO BE HERE WAS FALSE AND ROUND 328 MEASURED IT.**  It said "the cache has no
     /// consumer yet - `moe_hit_grouped_s2` does not exist - so switching it on costs the fill traffic and
@@ -2942,7 +2943,7 @@ int main(int argc, char** argv) {
         const uint64_t ex = fec ? 0 : experts;   // a GGUF pack without experts.bin: the 92 GiB rule alone
         const bool by_size = o.low_ram == -1 && strata::platform::low_ram_by_size(installed, ex);
         if (o.low_ram == 1 || (o.low_ram == -1 && strata::platform::low_ram_auto(installed, ex))) {
-            o.mmap_experts = o.resident_cpu_experts = o.resident_pin = true;
+            o.mmap_experts = o.resident_cpu_experts = o.resident_pin = o.low_ram_on = true;
             o.resident_headroom = (by_size ? strata::platform::kLowRamBySizeHeadroomGib : 6ull) << 30;   // left to
                                                                        // Windows and the rest of the engine's host memory
             if (const char* v = std::getenv("STRATA_RESIDENT_HEADROOM_GIB"); v != nullptr && std::atof(v) >= 0.0)
@@ -6114,6 +6115,19 @@ int main(int argc, char** argv) {
             }
 #endif
         }
+        // PIN / G2b: in the low-RAM mode the default reserve left 0-173 MiB free at serve start (Q8_0, RTX 5090), WDDM
+        // paged, and the GPU reading the RAM copy's pinned slices over PCIe waited 14-54 ms a window instead of 6-8:
+        // decode 37-44 tok/s instead of 49-55 with --vram-reserve-mib 1500 (981-1248 MiB free).  So the low-RAM mode
+        // keeps that floor under WDDM; a reserve given on the command line is kept as it is.
+#if defined(_WIN32)
+        constexpr int kLowRamAutoReserveMib = 1500;
+        if (o.low_ram_on && !o.vram_reserve_given && o.vram_reserve_mib < kLowRamAutoReserveMib) {
+            std::fprintf(stderr, "strata generate: expert cache auto: the low-RAM mode keeps %d MiB free after the cache "
+                                 "(instead of %d: a full card pages under WDDM and slows the reads of the RAM copy); "
+                                 "--vram-reserve-mib N sets it\n", kLowRamAutoReserveMib, o.vram_reserve_mib);
+            o.vram_reserve_mib = kLowRamAutoReserveMib;
+        }
+#endif
         const int64_t prefill_mib = owned_prefill_mib();
         // the draft layer's head and logits are allocated when it binds, after this: 0.1.27's CJK subset made them
         // ~110-180 MiB larger, and out of the reserve they left 16 GB cards below the stall line (#199)
