@@ -469,8 +469,8 @@ fork's branches.
       without a folder.
   - **Context.** `--max-context` offers setup's sizes, 8K-512K. It is never empty: without it the engine runs 4096
     tokens.
-    - Past 262,144 the page adds what setup writes there: `--rope-scaling yarn` (or linear) and `--rope-scale`
-      context / 262144, so 2 at 512K.
+    - Past 262,144 the page adds what setup writes there: `--rope-scaling dynamic` (yarn with several GPUs or
+      dialogs at once; or the method picked) and `--rope-scale` context / 262144, so 2 at 512K.
     - Back within 262,144 both are removed. `none` past it is refused, as setup refuses it.
     - Checked on the engine (73ef678b): "rope scaling yarn, factor 2 ... --max-context 524288", K/V 6.70 GiB at full
       length, the disk tier on and persistent.
