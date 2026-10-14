@@ -531,7 +531,6 @@ Verifier::~Verifier() {
     if (arena_) cudaFree(arena_);
     void* hosts[] = {h_tok_, h_step_, h_pos_, h_commit_, h_ple_, h_out_, h_x_, h_ids_, h_w_, h_seq_, h_flag_, h_ymiss_,
                      h_flagA_, h_plan_, h_flagB_, h_plan_err_, h_nf_, h_bal_};
-)
     for (void* h : hosts)
         if (h) cudaFreeHost(h);
 }
@@ -1651,7 +1650,6 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
                     wait_flag_ge_stamped(m_flagA_, ring, nullptr, m_bal_ + ((l - lb_) * 2 + grp) * 4, cs);
                 else
                     wait_flag_ge(m_flagA_, ring, cs);              // the pool published this group's GPU plan
-)
                 copy_i32_from_mapped(pl, m_plan_ + (size_t) grp * (size_t) plan_i32_, plan_i32_, cs);
                 }
             }
@@ -1685,7 +1683,6 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
                     else
                         wait_flag_ge(m_flag_, ring, cs);           // the CPU's share is in the mapped rows
                 }
-)
                 stamp(l, 23, grp);
                 if (remote_opt_)   // #578: the helper's rows come back reduced; skip them as well
                     remote_opt_->copy_rows(parts_out, m_ymiss_ + (size_t) tb * K * N, tb, n, p_dst, p_counts + 1, cs);

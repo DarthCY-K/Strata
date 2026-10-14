@@ -3774,7 +3774,6 @@ void expert_pool_dispatch_multi(ExpertDispatch& d, const float* x_f, const int32
         // pinned (the fetch below checks), else it stays a CPU miss exactly as before.  Read once.
         static const bool pcie_min1 = [] { const char* v = std::getenv("STRATA_PCIE_MIN1"); return v && std::atoi(v) != 0; }();
         if (pcie_min1 && pcie_ok && m < 1 && nmiss >= 2) m = 1;
-)
         int miss_rank = 0, groups = 0, entries = 0, fetches = 0;
         GpuPlanSink& P = *d.plan;
         const uint8_t* dma_src[64];

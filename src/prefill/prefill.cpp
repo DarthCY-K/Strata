@@ -1941,7 +1941,6 @@ uint64_t Prefill::bytes_needed_impl(const core::ModelGeometry& g, const core::Se
 uint64_t Prefill::bytes_needed_no_ring(const core::ModelGeometry& g, const core::SessionState& ss, int64_t chunk,
                                         bool src) {
     return bytes_needed(g, ss, chunk, src) - (uint64_t) stage_slots((size_t) chunk) * (uint64_t) MAXBLOB();
-)
 }
 
 int64_t Prefill::ring_default_slots() {
@@ -3894,7 +3893,6 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
                                 const bool last_of_group = q + 1 == MMQ_GROUP || j + 1 == order.size();
                                 if (gg_now) {
 
-)
                                     gg.blob[q] = blob_dev;
                                     gg.n = (int) q + 1;
                                     if (slot >= 0) gg_slots[gg_nslots++] = slot;

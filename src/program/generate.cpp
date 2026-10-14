@@ -10678,7 +10678,6 @@ int main(int argc, char** argv) {
             // embedding floats, so a picture encoded again with other bits still matches.  Absent: the embeddings' hash.
             std::vector<uint64_t> req_img_keys;
             bool req_pcie_set = false;   // the request names its own share (the measured one holds meanwhile)
-)
             if (endp != nullptr) {   // GENI takes the same keys (#75: image requests were always greedy); its
                                      // embedding file path is the first token without an =
                 for (;;) {
@@ -11700,7 +11699,6 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "strata serve: aux cpus %s for this request%s\n", strata::aux_cpus::enabled() ? "ON" : "off",
                                  want && !strata::aux_cpus::enabled() ? " (asked for, but no CPU is spare: see the start-up line)" : "");
             }
-)
             drive.d.pcie_num = std::max(0, std::min(256, (int) (req_pcie_frac * 256.0 + 0.5)));
             // a layer split: CUDA0's share as asked; a later GPU keeps its own (its link) unless the request sets one
             for (int st = 0; st < split_drive.n; ++st)
