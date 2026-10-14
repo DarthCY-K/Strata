@@ -374,6 +374,33 @@ Tried and dropped:
 - The adaptive tier's swaps spread over every round (24 a round instead of 96 every 4): 1.2% fewer rounds/s.
   Without the tier decode drops 23%. High process priority: no change.
 
+### Kept dialogs give RAM back when it runs short (2026-10-14, branch extras/cache-pressure)
+
+- **Before:** a dialog was parked only with `--conversation-cache-min-free-mib` (default 2560) free after it, but once
+  parked it stayed in RAM until another park or restore pushed it out - also when you opened other programs later or
+  the engine itself grew.
+- **Now:** before every request, between batch windows and every 2 s while idle, the engine reads the available RAM
+  (one `GlobalMemoryStatusEx`; on Linux MemAvailable and the cgroup limits). Below the floor it gives RAM back:
+  the retained K/V, then the parked dialogs, least recently used first, then the idle `--batch` slots' checkpoints. It
+  stops at the floor + 1 GiB. With a disk tier a released dialog goes to the disk, as on any eviction, but with the
+  file flushed: unflushed, Windows keeps the written bytes as modified file cache, which it does not count as available
+  for seconds, and the engine released all 4 dialogs where 3 were enough. Without a disk tier a released dialog is
+  dropped and read again when its client comes back. One log line per event:
+  `conversation cache: RAM below the floor: released 3 dialogs, 3338 MiB (dropped) in 104 ms; idle: 8642 -> 11937 MiB
+  available, floor 10240 MiB + 1024; parked=1`.
+- **The memory really leaves the process.** Windows' CRT heap hands blocks this large back on free (2.1 GiB of
+  mixed sizes: private bytes back to 1 MiB). On Linux glibc keeps them unless `malloc_trim` runs, which it does after
+  each step (without it the test's second 256 MiB stays in the process).
+- **Measured on the 5090** (4 dialogs of 32K-100K parked, 5.6 GB; floor 10240 MiB; a ballast took RAM down to 8.6 GB
+  available): 2.0 s later the three oldest went in 104 ms, the engine's private bytes fell by 3283 MiB and 11.9 GB was
+  available. The newest stayed parked and came back in 0.19 s. A released 32K dialog was read again in 3.6 s. With
+  the disk tier the same three went to the disk in 2.2 s (flushed, ~1.6 GB/s) and the 32K one came back from it in
+  0.89 s. With `"parallel": 2` and both dialogs cached in their slots, the two parked images and then the slots' turn
+  checkpoints went (2180 MiB); the slots' K/V stayed in VRAM, so their next turns still reused 32K and 48K tokens.
+  Without pressure nothing changes: the logits are byte-identical to rel/0.1.44's tip and nothing is released.
+- `STRATA_CONV_PRESSURE_MS` (2000; 0 = off) and `STRATA_CONV_PRESSURE_HYST_MIB` (1024) tune it. The default floor stays
+  2560 MiB; on a Windows desktop that also runs other programs, 10240 leaves Windows its headroom.
+
 ### Model settings: dialogs, dialogs at once, the context (2026-10-14, branch extras/gui-settings)
 
 - **The controls were outside the card.** The Model settings card's label column was `max-content`. Since the
