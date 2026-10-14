@@ -3028,12 +3028,13 @@ _ROPE_SAID: set[str] = set()
 
 def rope_fallback_args(cfg: dict, args: list[str]) -> list[str]:
     """--rope-scaling dynamic that setup or the Settings page chose by itself ("rope_auto": true), where this start
-    cannot run it - several GPUs or batch slots (--gpu/--replicas, a hand-edited "gpu" or "parallel"): yarn for this
-    start, said once.  An explicit dynamic is passed on: the engine refuses it and names yarn."""
+    cannot run it - several GPUs or batch slots (--gpu/--replicas, a hand-edited "gpu" or "parallel") - or where it is
+    not measured (AMD): yarn for this start, said once.  An explicit dynamic is passed on (where the engine refuses it,
+    it names yarn)."""
     if cfg.get("rope_auto") is not True or "--rope-scaling" not in args[:-1]:
         return args
     i = args.index("--rope-scaling") + 1
-    why = runconfig.dynamic_blocker(cfg, args) if args[i] == "dynamic" else None
+    why = runconfig.dynamic_blocker(cfg, args) or runconfig.dynamic_untested(cfg) if args[i] == "dynamic" else None
     if why is None:
         return args
     args = list(args)
