@@ -134,8 +134,8 @@ class UnslothDefaultEnv(unittest.TestCase):
 
 class EnginePlaceholders(unittest.TestCase):
     def test_every_engine_minimum_is_this_release(self):
-        self.assertEqual(setup.UPSTREAM_MIN_ENGINE, (0, 1, 44))   # this fork: MIN_ENGINE is its own release, above it
-        self.assertGreaterEqual(setup.MIN_ENGINE, (0, 1, 44))
+        self.assertEqual(setup.UPSTREAM_MIN_ENGINE, (0, 1, 44, 1))   # this fork: MIN_ENGINE is its own release, above it
+        self.assertGreaterEqual(setup.MIN_ENGINE, (0, 1, 44, 1))
         for m in ("UD-Q5_K_XL", "UD-Q6_K_XL"):
             self.assertEqual(setup.MODELS[m]["engine"], (0, 1, 44), m)
         self.assertIn("0.1.44", (ROOT / "CMakeLists.txt").read_text(encoding="utf-8").split("project(strata VERSION", 1)[1][:12])
