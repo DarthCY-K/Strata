@@ -405,7 +405,8 @@ fork's branches.
     teacher-forced KL against the old copy is at the placement-noise level, and the 128 GB arena path is byte-identical.
     With it, under WDDM the low-RAM mode keeps 1500 MiB of VRAM free by default (`--vram-reserve-mib` overrides), for
     other programs' VRAM: on an idle desktop that costs 161 slots and ~3% decode (53.3 / 8.5 s).
-  - extras/rope-dynamic: `--rope-scaling dynamic` (opt-in): no scaling while a dialog fits 262,144 positions (byte-
+  - extras/rope-dynamic: `--rope-scaling dynamic` (setup and Model settings write it past 262,144 on one NVIDIA GPU
+    with one dialog at a time, extras/rope-dynamic-ui; static yarn elsewhere): no scaling while a dialog fits 262,144 positions (byte-
     identical to none), past them yarn with factor = length / 262,144 rounded up to 0.125, at most --max-context /
     262,144; the cached keys are rotated when the factor changes (8-15 ms, plus a 30-48 ms table rebuild). Past 262K
     it gains what static yarn gains (-0.011 nats on the far bands, ~1% perplexity; the needles 13/13 either way), and
