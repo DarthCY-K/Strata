@@ -5648,7 +5648,7 @@ def derived_factor(ctx: int, trained: int = 262144) -> float:
     return max(1.0, float(ctx) / float(trained))
 
 
-ROPE_DYNAMIC_ENGINE = (0, 1, 44, 0, 1)   # this fork's first engine with --rope-scaling dynamic
+ROPE_DYNAMIC_ENGINE = (0, 1, 44, 1, 1)   # the first fork release with --rope-scaling dynamic (0.1.44-nvfp4.1 had none)
 
 
 def rope_dynamic_blocker(gpus: int = 1, parallel=None, kv=None, meta: dict | None = None) -> str | None:
