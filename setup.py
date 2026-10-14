@@ -6659,16 +6659,21 @@ def install_own_path(a, family, gpu, hip, amd, cuda_tk, multi, port, ram, adopte
     if a.model and a.model not in names:
         fail(f"{fam['title']} has no {a.model} model file", "choose one of: " + ", ".join(names))
     say()
+    # 0.1.44.1's rule here too: setup run again over an installed size pre-selects it (and --yes takes it), so Enter
+    # never moves a working UD-Q4_K_XL to the larger size the RAM would allow (Q8_0 is ~1/3 its speed on a 32 GB card)
+    installed = installed_size(family, names, installed_configs())
     for i, m in enumerate(names, 1):
         d = fam["models"][m]
         size = fam["sha256"][fam["file"].format(q=m)][0]
         fit = "" if ram >= d["ram_gb"] else f"   <- needs {d['ram_gb']} GB RAM, you have {ram:.0f}"
-        say(f"  {i}) {m:10s} {d['about']}; download {size / 1e9:.1f} GB{fit}")
+        say(f"  {i}) {m:10s} {d['about']}; download {size / 1e9:.1f} GB{fit}"
+            + ("   (installed)" if m == installed else ""))
     rec = own_path_size(fam, ram)
     if not a.model:
-        say(f"  Recommended for {ram:.0f} GB of RAM: {rec} (the largest that fits; any size can be chosen)")
+        say(f"  Recommended for {ram:.0f} GB of RAM: {rec} (the largest that fits; any size can be chosen)"
+            + (f"; Enter keeps the installed {installed}" if installed and installed != rec else ""))
     model = a.model or names[int(ask("Which size?", [str(i) for i in range(1, len(names) + 1)],
-                                     str(names.index(rec) + 1), a.yes)) - 1]
+                                     str(names.index(installed or rec) + 1), a.yes)) - 1]
     if ram < fam["models"][model]["ram_gb"]:            # every size stays available on any PC: a note, no question
         warn(f"installing {model} with {ram:.0f} GB of RAM, as you chose: it needs about "
              f"{fam['models'][model]['ram_gb']} GB, so the OS may page and it may not start")
@@ -7287,7 +7292,7 @@ def main() -> int:
         except (OSError, ValueError, KeyError, TypeError):
             inst = None
         # the NVFP4 default where the PC meets its requirements; a --model (a GGUF size) keeps the GGUF default
-        rec_fam = inst if inst in nv + fams else STRIX_HALO_FAMILY if strix else NVFP4_DEFAULT \
+        rec_fam = inst if inst in nv + fams + list(OWN_PATH_FAMILIES) else STRIX_HALO_FAMILY if strix else NVFP4_DEFAULT \
             if NVFP4_DEFAULT in nv and not a.model and nvfp4_short(gpu, ram, NVFP4_DEFAULT) is None else fams[0]
         fams = nv + fams
         for i, f in enumerate(fams, 1):
