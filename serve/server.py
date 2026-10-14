@@ -3020,7 +3020,31 @@ def engine_args(cfg: dict) -> list[str]:
         if isinstance(seg, int) and not isinstance(seg, bool) and seg > 0 and "--vram-segment-mib" not in args:
             args += ["--vram-segment-mib", str(seg)]
     args += parallel_args(cfg, args)
-    return learned_profile_args(cfg, args)
+    return learned_profile_args(cfg, rope_fallback_args(cfg, args))
+
+
+_ROPE_SAID: set[str] = set()
+
+
+def rope_fallback_args(cfg: dict, args: list[str]) -> list[str]:
+    """--rope-scaling dynamic that setup or the Settings page chose by itself ("rope_auto": true), where this start
+    cannot run it - several GPUs or batch slots (--gpu/--replicas, a hand-edited "gpu" or "parallel"): yarn for this
+    start, said once.  An explicit dynamic is passed on: the engine refuses it and names yarn."""
+    if cfg.get("rope_auto") is not True or "--rope-scaling" not in args[:-1]:
+        return args
+    i = args.index("--rope-scaling") + 1
+    why = runconfig.dynamic_blocker(cfg, args) if args[i] == "dynamic" else None
+    if why is None:
+        return args
+    args = list(args)
+    args[i] = "yarn"
+    ctx = str(args[args.index("--max-context") + 1]) if "--max-context" in args[:-1] else ""
+    if "--rope-scale" not in args and ctx.isdigit():
+        args += ["--rope-scale", f"{int(ctx) / runconfig.TRAINED_CTX:g}"]
+    if why not in _ROPE_SAID:
+        _ROPE_SAID.add(why)
+        print(f"[strata] RoPE: yarn for this start instead of dynamic, which {why}", flush=True)
+    return args
 
 
 PARALLEL_MAX = 8      # the engine's batch window holds at most 8 rows (kVerifyMaxT); --batch-mtp waves more through it
