@@ -30,9 +30,10 @@ engine is this fork's (its release's, or compiled from this source).  --dry-run 
 Withdrawn, an install of either keeps working: huihui-nvfp4 (0.1.41-nvfp4.3, it often loops in long thinking) and
 orca-nvfp4 (0.1.41-nvfp4.5, its abliteration made it a much weaker agent).
 
-Options: --family qwen-nvfp4-gptq|qwen-nvidia-nvfp4|qwen-nvfp4-mix|qwen-q8|qwen|swift|coder|unsloth, --uncensored on|off, --model Q2_0|IQ2_XS|IQ3_XXS|IQ3_S, --context 32768, --rope-scaling none|linear|yarn
-(--rope-scale F; past the trained 262144 the setup adds yarn and the factor is the final context over 262144,
-at least 1 - an explicit --rope-scaling none is refused for such a context), --vision yes|no|gpu|cpu, --port
+Options: --family qwen-nvfp4-gptq|qwen-nvidia-nvfp4|qwen-nvfp4-mix|qwen-q8|qwen|swift|coder|unsloth, --uncensored on|off, --model Q2_0|IQ2_XS|IQ3_XXS|IQ3_S, --context 32768, --rope-scaling none|dynamic|linear|yarn
+(--rope-scale F; past the trained 262144 the setup adds dynamic - yarn where it cannot run: several GPUs, parallel
+dialogs, 4-bit K/V - and the factor is the final context over 262144, at least 1 - an explicit --rope-scaling none
+is refused for such a context), --vision yes|no|gpu|cpu, --port
 8080, --yes (recommended
 answers, no questions), --setup (install another model / change settings instead of starting), --no-start,
 --host 0.0.0.0 --api-key KEY (reach it from other devices on your network), --experimental-speed-projection on|off
@@ -349,7 +350,8 @@ UNSLOTH_ENGINE = (0, 1, 32)     # the first engine setup configures for UD-Q4_K_
 UNSLOTH_RAM_LEFT_GB = 24        # RAM beside the budget: the OS, the engine, and the file cache the rest is read through
 UNSLOTH_MIN_RAM_GB = 48         # the RAM-budget mode below which setup says an Unsloth file does not fit (UD-Q4_K_XL's floor)
 # Contexts past 262144 (the model's trained length) extend it by rope scaling: for the context it will
-# serve the setup resolves the method (yarn, or one question when interactive) and derives the factor
+# serve the setup resolves the method (dynamic where the engine runs it, else yarn, or one question when
+# interactive) and derives the factor
 # from the final context (final / 262144, at least 1) itself (below), keeps an explicit
 # --rope-scaling/--rope-scale, and refuses an explicit --rope-scaling none there - the stock angles past
 # the trained range are out of spec.
@@ -4520,7 +4522,7 @@ def write_config(path: Path, cfg: dict):
 # (carry_over adds only the keys they did not set)
 SETUP_KEYS = frozenset({"exe", "args", "cwd", "tokenizer", "model_name", "log", "lib_dirs", "port", "backend", "env",
                         "gpu", "gpus_asked", "layer_split", "host", "api_key", "draft_vocab", "vision",
-                        "uncensored", "sampling"})
+                        "uncensored", "sampling", "rope_auto"})
 SETUP_ENV = frozenset({"STRATA_HIPBLASLT_TUNING", "STRATA_RESIDENT_PIN", "STRATA_NO_ARENA_THP", "STRATA_MMQ_KQ",
                        "STRATA_HC_Q8", "STRATA_ROUTE_TAIL_SKIP"})   # the "env" entries setup writes
 # 0.1.44 added these three, written for Unsloth's files only (unsloth_default_env).  In any other model's config they are the
@@ -4619,6 +4621,12 @@ def write_setup_config(cfg_path: Path, cfg: dict, source: Path | None = None) ->
         if not isinstance(old, dict):
             old = None
     kept = carry_over(old, cfg) if old is not None else []
+    try:                                               # e.g. "parallel": 2 kept from the earlier config: yarn
+        note = fit_auto_rope(cfg)
+    except ValueError as e:
+        fail(str(e))
+    if note:
+        ok(note)
     if "images" in cfg and cfg["images"] is None:      # --images no (or not downloaded): no image section
         cfg.pop("images")
     bak = None
@@ -4715,6 +4723,9 @@ def choices_from_config(cfg_path: Path) -> dict:
             if esp_path and Path(esp_path).name == UNCENSOR_VECTOR.name else None,
             "host": cfg.get("host"), "api_key": cfg.get("api_key"), "port": cfg.get("port"), "gpu": cfg.get("gpu"),
             "layer_split": cfg.get("layer_split"), "cuda": 12 if config_toolkit(cfg) == 12 else None,
+            # the RoPE method when it was the user's choice ("rope_auto": false); setup's own is chosen again
+            "rope_scaling": val("--rope-scaling") if cfg.get("rope_auto") is False and
+            val("--rope-scaling") in ("dynamic", "yarn", "linear") else None,
             # #493: --vram-reserve-mib given at setup (images write the default 700 themselves)
             "vram_reserve_mib": int(val("--vram-reserve-mib")) if (val("--vram-reserve-mib") or "").isdigit() and (
                 vis is None or int(val("--vram-reserve-mib")) != VISION["gpu"]["reserve_mib"]) else None}
@@ -5173,6 +5184,14 @@ def start(cfg_path: Path, port: int | None, gpu: int | list | None = None, open_
         cmd += ["--gpu", str(gpu)]
     else:
         cfg = offer_together(cfg_path, cfg, yes)
+    try:                                               # dynamic RoPE is one-GPU: on several now, setup's own -> yarn
+        note = fit_auto_rope(cfg)
+    except ValueError as e:
+        warn(str(e))
+        note = None
+    if note:
+        ok(note)
+        write_config(cfg_path, cfg)
     use = gpu if gpu is not None else cfg.get("gpu")
     # #364 #384: a resident low-RAM config on several GPUs; #498: a UD-Q4_K_XL config with its RAM budget (by hand)
     if isinstance(use, list) and (split_mmap(cfg) | split_budget(cfg)):
@@ -5629,31 +5648,126 @@ def derived_factor(ctx: int, trained: int = 262144) -> float:
     return max(1.0, float(ctx) / float(trained))
 
 
-def resolve_rope(ctx: int, scaling, scale, trained: int = 262144):
+ROPE_DYNAMIC_ENGINE = (0, 1, 44, 0, 1)   # this fork's first engine with --rope-scaling dynamic
+
+
+def rope_dynamic_blocker(gpus: int = 1, parallel=None, kv=None, meta: dict | None = None) -> str | None:
+    """Why the engine would refuse --rope-scaling dynamic in this config, or None.  Dynamic RoPE rotates the cached
+    keys of one session: one GPU (no layer split), one dialog at a time (no --batch slots), 8-bit or fp16 K/V, and
+    this fork's engine: compiled from this source, or its release from ROPE_DYNAMIC_ENGINE on (`meta`: the engine's
+    BUILD.json; None = not known yet)."""
+    if meta is not None and meta.get("source") != "local" and not (
+            meta.get("fork") and version_tuple(meta.get("version")) >= ROPE_DYNAMIC_ENGINE):
+        return (f"needs this fork's engine {version_text(ROPE_DYNAMIC_ENGINE)} or newer (this one: "
+                f"{meta.get('version')})")
+    if gpus > 1:
+        return f"needs one GPU for now (this config: {gpus})"
+    if isinstance(parallel, int) and not isinstance(parallel, bool) and parallel > 1:
+        return f"needs one dialog at a time for now (parallel {parallel})"
+    if kv not in (None, "int8", "fp16"):
+        return f"needs 8-bit or fp16 K/V (--kv {kv})"
+    return None
+
+
+def resolve_rope(ctx: int, scaling, scale, trained: int = 262144, blocker: str | None = None):
     """The rope config for the context ACTUALLY SERVED: (scaling, scale); scaling None = no scaling flags.
 
     An explicit --rope-scaling/--rope-scale always wins - a user-supplied factor is kept verbatim even
-    when a reduction changed the context.  Past the trained range an omitted method defaults to yarn -
-    llama.cpp's extension method: the trained angles survive on the high-frequency pairs and the
-    magnitude correction keeps the attention temperature - and an omitted factor is derived from the
-    final context (final / trained, at least 1), as is an explicitly chosen method's missing factor
-    inside the trained range: factor 1, the trained angles, no expansion.  An explicit none is refused
-    past the trained range (the setup will not configure a run it knows is out of spec) rather than
-    silently overridden.
+    when a reduction changed the context.  Past the trained range an omitted method defaults to dynamic -
+    none while a dialog fits the trained range, yarn with the factor its length needs past it (at most
+    --rope-scale), so short dialogs run the trained angles bit for bit - and to yarn where the engine would
+    refuse dynamic (`blocker`, rope_dynamic_blocker's reason: several GPUs, parallel dialogs, 4-bit K/V).
+    yarn is llama.cpp's extension method: the trained angles survive on the high-frequency pairs and the
+    magnitude correction keeps the attention temperature.  An omitted factor is derived from the final
+    context (final / trained, at least 1), as is an explicitly chosen method's missing factor inside the
+    trained range: factor 1, the trained angles, no expansion; dynamic there is the stock model.  An
+    explicit none past the trained range is refused (the setup will not configure a run it knows is out of
+    spec) rather than silently overridden, and so is an explicit dynamic the engine would refuse.
     """
     if ctx <= trained:
-        if scale is not None and scaling in (None, "none"):
+        if scale is not None and scaling in (None, "none", "dynamic"):
             raise ValueError("--rope-scale needs --rope-scaling linear or yarn (the chosen context fits the "
                              "trained 262144, so there is nothing to scale)")
-        if scaling in (None, "none"):
+        if scaling in (None, "none", "dynamic"):
             return None, None          # the stock model, by choice or by default
         return scaling, scale if scale is not None else derived_factor(ctx, trained)
     if scaling == "none":
         raise ValueError(f"a {ctx // 1024}K context is past the model's trained 262144, and --rope-scaling none "
                          "keeps the stock angles there - the model has never seen those positions, so the setup "
-                         "refuses the combination instead of quietly overriding it. Pick --rope-scaling yarn or "
-                         "linear, or rerun with --context 262144 or lower")
-    return scaling or "yarn", scale if scale is not None else derived_factor(ctx, trained)
+                         "refuses the combination instead of quietly overriding it. Pick --rope-scaling dynamic, yarn "
+                         "or linear, or rerun with --context 262144 or lower")
+    if scaling == "dynamic" and blocker:
+        raise ValueError(f"--rope-scaling dynamic {blocker}: the engine would refuse it at start. Pick --rope-scaling "
+                         "yarn or linear, or leave it out (dynamic where it runs, else yarn)")
+    return scaling or ("yarn" if blocker else "dynamic"), scale if scale is not None else derived_factor(ctx, trained)
+
+
+def engine_meta_of(cfg: dict) -> dict | None:
+    """The BUILD.json beside a run config's engine, or None."""
+    try:
+        meta = json.loads((Path(cfg["exe"]).parent / "BUILD.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return meta if isinstance(meta, dict) else None
+
+
+def fit_auto_rope(cfg: dict) -> str | None:
+    """A run config whose RoPE method setup chose by itself ("rope_auto": true) kept in step with the config: dynamic,
+    or yarn where the engine would refuse dynamic (several GPUs, "parallel" above 1, 4-bit K/V, an engine without it).
+    The line to say when it changed the method, else None.  An explicit dynamic the engine would refuse raises
+    ValueError naming why; any other explicit method is left as it is."""
+    args = cfg.get("args") if isinstance(cfg.get("args"), list) else []
+    if "--rope-scaling" not in args[:-1]:
+        return None
+    i = args.index("--rope-scaling") + 1
+    auto = cfg.get("rope_auto") is True
+    if not auto and args[i] != "dynamic":
+        return None
+    g = cfg.get("gpu")
+    why = rope_dynamic_blocker(len(g) if isinstance(g, list) else 1, cfg.get("parallel"), flag_value(args, "--kv"),
+                               engine_meta_of(cfg))
+    if not auto:
+        if why:
+            raise ValueError(f"--rope-scaling dynamic {why}: the engine would refuse it at start. Run setup again "
+                             "with --rope-scaling yarn, or without --rope-scaling (dynamic where it runs, else yarn)")
+        return None
+    want = "yarn" if why else "dynamic"
+    if args[i] == want:
+        return None
+    args[i] = want
+    return f"rope scaling: {want}" + (f" - dynamic RoPE {why}" if why else " (one GPU, one dialog at a time)")
+
+
+def ask_rope(a, ctx: int, blocker: str | None):
+    """(method, factor, auto) for `ctx`: resolve_rope's config, and whether setup chose the method itself (the
+    config's "rope_auto": fit_auto_rope keeps it in step).  Past the trained 262144, when interactive and no
+    --rope-scaling was given: one question, the recommended method preselected - taking it is setup's own choice."""
+    scaling = a.rope_scaling
+    rec = "yarn" if blocker else "dynamic"
+    if ctx > 262144 and scaling is None and not a.yes:
+        say()
+        say(f"  A {ctx // 1024}K context runs the model past its trained 262,144 positions: the rotary angles")
+        say("  get rescaled (llama.cpp's RoPE extension). dynamic keeps the trained angles until a dialog passes")
+        say("  262,144 tokens, then turns yarn on with the factor its length needs; yarn rescales every dialog,")
+        say("  short ones too (it keeps the trained angles on the high-frequency pairs); linear shrinks every angle.")
+        if blocker:
+            say(f"  dynamic {blocker}, so it is not offered here.")
+        say("  Override any time with --rope-scaling.")
+        picked = ask("RoPE extension method?", ["yarn", "linear"] if blocker else ["dynamic", "yarn", "linear"],
+                     rec, a.yes)
+        scaling = None if picked == rec else picked
+    try:
+        method, scale = resolve_rope(ctx, scaling, a.rope_scale, blocker=blocker)
+    except ValueError as e:
+        fail(str(e))
+    if method is not None:
+        origin = ("final context / trained 262144; override with --rope-scale" if a.rope_scale is None
+                  else "as requested")
+        ok(f"rope scaling: dynamic - none while a dialog fits 262,144 tokens, past it yarn up to factor {scale:g} "
+           f"({origin})" if method == "dynamic" else f"rope scaling: {method}, factor {scale:g} ({origin})")
+        if scaling is None and blocker:
+            say(f"  yarn instead of dynamic RoPE, which {blocker}")
+    return method, scale, scaling is None and method is not None
 
 
 # ------------------------------------------------------------------------------------------------ this fork
@@ -6367,17 +6481,6 @@ def nvfp4_install(a, family: str, gpu: dict, multi: list, cuda_tk: int, ram: flo
     if vram < 14 and ctx > 65536:
         warn(f"{ctx // 1024}K on a {vram:.0f} GB card: measured, 262144 does not start on 12 GB (no VRAM is left for "
              f"the expert cache); {rec_ctx // 1024}K is the recommended size. Kept as you chose")
-    scaling = a.rope_scaling
-    if ctx > 262144 and scaling is None and not a.yes:
-        say()
-        say(f"  A {ctx // 1024}K context runs the model past its trained 262,144 positions: yarn (recommended) or linear.")
-        scaling = ask("RoPE extension method?", ["yarn", "linear"], "yarn", a.yes)
-    try:
-        scaling, rope_scale = resolve_rope(ctx, scaling, a.rope_scale)
-    except ValueError as e:
-        fail(str(e))
-    if scaling is not None:
-        ok(f"rope scaling: {scaling}, factor {rope_scale:g}")
     ok(f"context: {ctx} tokens")
     kv = "fp16" if ctx <= 8192 else (a.kv or "int8")
     if ctx > 8192 and not a.kv and not a.yes:
@@ -6388,6 +6491,7 @@ def nvfp4_install(a, family: str, gpu: dict, multi: list, cuda_tk: int, ram: flo
         kv = ["int8", "q4_0"][int(ask("KV cache?", ["1", "2"], "1", a.yes)) - 1]
     if ctx > 8192:
         ok(f"KV cache: {'8-bit' if kv == 'int8' else kv}")
+    scaling, rope_scale, rope_auto = ask_rope(a, ctx, rope_dynamic_blocker(1, a.parallel, kv))
     if a.vision:
         vision = {"yes": "cpu", "no": "none"}.get(a.vision, a.vision)   # yes: the encoder on the CPU, as the tray
     else:
@@ -6505,6 +6609,8 @@ def nvfp4_install(a, family: str, gpu: dict, multi: list, cuda_tk: int, ram: flo
            "lib_dirs": lib_dirs, "port": port, "gpu": gpu["index"], "gpus_asked": True}   # one card, not asked again
     if family in FAMILY_SAMPLING:                      # the model's recommended sampling (a request's own values win)
         cfg["sampling"] = dict(FAMILY_SAMPLING[family])
+    if scaling is not None:                            # setup's own RoPE choice is kept in step (fit_auto_rope)
+        cfg["rope_auto"] = rope_auto
     for k in ("host", "api_key"):
         if getattr(a, k):
             cfg[k] = getattr(a, k)
@@ -6837,10 +6943,12 @@ def main() -> int:
                                                                        for m in f["models"]),
                                                            *NVFP4_UPSTREAM_MODELS])))
     ap.add_argument("--context", type=int)
-    ap.add_argument("--rope-scaling", choices=["none", "linear", "yarn"],
-                    help="the RoPE extension for a context past the model's trained 262144: linear (position "
-                         "interpolation) or yarn - llama.cpp's types. Omitted with a scaled context, the setup "
-                         "picks yarn; 'none' is refused for such a context")
+    ap.add_argument("--rope-scaling", choices=["none", "dynamic", "linear", "yarn"],
+                    help="the RoPE extension for a context past the model's trained 262144: dynamic (none while a "
+                         "dialog fits 262144, yarn with the factor its length needs past it; one GPU, one dialog at "
+                         "a time, 8-bit K/V), linear (position interpolation) or yarn - llama.cpp's types. Omitted "
+                         "with a scaled context, the setup picks dynamic where it runs, else yarn; 'none' is refused "
+                         "for such a context")
     ap.add_argument("--rope-scale", type=float,
                     help="the extension factor (default: the final context over the trained 262144, at least 1 - "
                          "1.5 for 384K, 2 for 512K, 1 inside the trained range)")
@@ -7015,6 +7123,7 @@ def main() -> int:
                 a.family, a.model, a.context = ch["family"], ch["model"], a.context or ch["context"]
                 adopted = prev
                 a.kv = a.kv or ch["kv"]
+                a.rope_scaling = a.rope_scaling or ch.get("rope_scaling")
                 a.vision = a.vision or ch["vision"]
                 a.experimental_speed_projection = a.experimental_speed_projection or ch["esp"]
                 a.uncensored = a.uncensored or ch.get("uncensored")
@@ -7442,24 +7551,6 @@ def main() -> int:
              f"({MODELS[model]['arena_gb']:.0f} GB of experts + the context + room for the rest); this PC has "
              f"{ram:.0f}. Kept as you chose: it may be slower or run out of RAM under load. {rec_ctx // 1024}K is the "
              "recommended size.")
-    scaling = a.rope_scaling
-    if ctx > 262144 and scaling is None and not a.yes:
-        # the interactive path: one question, yarn preselected (llama.cpp's extension method, recall-tested
-        # here at 512K).  With --yes nothing prints: resolve_rope takes yarn below and the ok() line says so.
-        say()
-        say(f"  A {ctx // 1024}K context runs the model past its trained 262,144 positions: the rotary angles")
-        say("  get rescaled (llama.cpp's RoPE extension). yarn keeps the trained angles on the high-frequency")
-        say("  pairs and corrects the magnitudes; linear shrinks every angle. Override any time with")
-        say("  --rope-scaling.")
-        scaling = ask("RoPE extension method?", ["yarn", "linear"], "yarn", a.yes)
-    try:
-        scaling, rope_scale = resolve_rope(ctx, scaling, a.rope_scale)
-    except ValueError as e:
-        fail(str(e))
-    if scaling is not None:
-        origin = ("final context / trained 262144; override with --rope-scale" if a.rope_scale is None
-                  else "as requested")
-        ok(f"rope scaling: {scaling}, factor {rope_scale:g} ({origin})")
     ok(f"context: {ctx} tokens")
     # the KV cache (the model's memory of the conversation): 8-bit, or 4-bit after a Hadamard rotation (PR #21)
     kv = "fp16" if ctx <= 8192 else (a.kv or "int8")
@@ -7472,6 +7563,9 @@ def main() -> int:
         kv = ["int8", "q4_0"][int(ask("KV cache?", ["1", "2"], "1", a.yes)) - 1]
     if ctx > 8192:
         ok(f"KV cache: {'8-bit' if kv == 'int8' else '4-bit (Hadamard-rotated)'}")
+    # past the trained 262144: dynamic RoPE where the engine runs it (one GPU, one dialog at a time, 8-bit K/V), else
+    # yarn; one question when interactive (ask_rope).  With --yes nothing prints but the ok() line.
+    scaling, rope_scale, rope_auto = ask_rope(a, ctx, rope_dynamic_blocker(len(multi) or 1, a.parallel, kv))
     if MODELS[model].get("vision", fam.get("vision")) is False:     # UD-IQ4_XS: images, unlike UD-Q4_K_XL
         vision = "none"
         if a.vision not in (None, "no", "none"):
@@ -7882,6 +7976,8 @@ def main() -> int:
            "lib_dirs": lib_dirs, "port": port}
     if family in FAMILY_SAMPLING:                      # the model's recommended sampling (a request's own values win)
         cfg["sampling"] = dict(FAMILY_SAMPLING[family])
+    if scaling is not None:                            # setup's own RoPE choice is kept in step (fit_auto_rope)
+        cfg["rope_auto"] = rope_auto
     if cuda_tk == 12:                                  # the experimental CUDA 12 engine (engine-cuda12/)
         cfg["cuda"] = 12
     if (uenv := unsloth_default_env(family, model, hip, in_budget)):

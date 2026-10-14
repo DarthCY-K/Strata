@@ -68,8 +68,10 @@ EDITABLE = [
      "Context size in tokens: the longest dialog. More takes more VRAM for its K/V, taken from the expert cache "
      "(3.35 GiB at 262,144, 6.7 GiB at 524,288). Past the model's trained 262,144 it needs the RoPE extension below"),
     ("rope_scaling", ("arg", "--rope-scaling", "rope"),
-     "RoPE extension past the trained 262,144 tokens: yarn (chosen there by default, measured the best at 512K) or "
-     "linear. The factor is the context over 262,144 (2 at 524,288), as setup writes it; within 262,144 none is used"),
+     "RoPE extension past the trained 262,144 tokens: dynamic (the trained angles until a dialog passes 262,144, then "
+     "yarn with the factor its length needs; one GPU, one dialog at a time), yarn (every dialog rescaled, short ones "
+     "too) or linear. Empty: dynamic where it runs, else yarn. The factor is the context over 262,144 (2 at 524,288; "
+     "for dynamic the largest), as setup writes it; within 262,144 none is used"),
 ]
 SPEC = {k: kind for k, kind, _ in EDITABLE}
 # the view's headings: the first key of each group -> its title
@@ -109,6 +111,8 @@ def _sub(kind) -> str:
 
 
 def value_of(cfg: dict, key: str):
+    if key == "rope_scaling" and cfg.get("rope_auto") is True:
+        return None                                    # setup's (or the page's) own choice: the empty field
     kind = SPEC[key]
     if isinstance(kind, tuple) and kind[0] == "sampling":
         s = cfg.get("sampling")
@@ -143,17 +147,44 @@ def _count_view(cfg: dict, key: str, kind) -> dict:
 
 def _context_view(cfg: dict, key: str) -> dict:
     """--max-context as setup's sizes (and the file's own); never empty: without it the engine runs 4096 tokens.
-    --rope-scaling: yarn or linear, the factor in force said in its help."""
+    --rope-scaling: dynamic, yarn or linear (empty: dynamic where it runs, else yarn), the method and factor in force
+    said in its help."""
     v = value_of(cfg, key)
     if key == "max_context":
         ns = sorted(set(CONTEXTS + ([v] if isinstance(v, int) else [])))
         return {"kind": "choice", "required": True, "default": "not set: the engine's 4096",
                 "choices": [[n, f"{n // 1024}K - {n:,}" + (" (the trained context)" if n == TRAINED_CTX else
                                                           " (RoPE extension)" if n > TRAINED_CTX else "")] for n in ns]}
-    scale = _arg(cfg, "--rope-scale", "text")
-    return {"kind": "enum", "default": f"default: yarn past {TRAINED_CTX:,}",
-            "choices": ["yarn", "linear"] + ([v] if v not in (None, "yarn", "linear") else []),
-            "note": f" - now: {v}, factor {scale}" if v is not None and scale is not None else ""}
+    scale, now = _arg(cfg, "--rope-scale", "text"), _arg(cfg, "--rope-scaling", "text")
+    why = dynamic_blocker(cfg)
+    return {"kind": "enum", "default": f"default: {'yarn' if why else 'dynamic'} past {TRAINED_CTX:,}",
+            "choices": list(ROPE_METHODS) + ([v] if v not in (None, *ROPE_METHODS) else []),
+            "note": (f" - now: {now}, factor {scale}" if now is not None and scale is not None else "") +
+                    (f"; dynamic {why}" if why and now is not None and v is None else "")}
+
+
+ROPE_METHODS = ("dynamic", "yarn", "linear")
+
+
+def dynamic_blocker(cfg: dict, args: list | None = None) -> str | None:
+    """Why the engine would refuse --rope-scaling dynamic for this config (or these final engine `args`), or None.  It
+    rotates the cached keys of one session: one GPU, one dialog at a time (no --batch slots), 8-bit or fp16 K/V."""
+    a = [str(x) for x in (args if args is not None else cfg.get("args") if isinstance(cfg.get("args"), list) else [])]
+    n = gpu_count(cfg)
+    if n > 1 or "--layer-split" in a:
+        return f"needs one GPU for now (this config: {n})"
+    flag = next((f for f in ("--batch", "--slots") if f in a[:-1]), None)
+    slots = int(a[a.index(flag) + 1]) if flag and a[a.index(flag) + 1].isdigit() else \
+        cfg.get("parallel") if args is None else None
+    if isinstance(slots, int) and not isinstance(slots, bool) and slots > 1:
+        return f"needs one dialog at a time for now (parallel {slots})"
+    kv = a[a.index("--kv") + 1] if "--kv" in a[:-1] else None
+    if kv not in (None, "int8", "fp16"):
+        return f"needs 8-bit or fp16 K/V (--kv {kv})"
+    env = cfg.get("env") if isinstance(cfg.get("env"), dict) else {}
+    if str(env.get("STRATA_ROPE_TABLE", os.environ.get("STRATA_ROPE_TABLE", ""))).startswith("0"):
+        return "needs the rope table (STRATA_ROPE_TABLE=0 is set)"
+    return None
 
 
 def view(cfg: dict, path: str | Path) -> dict:
@@ -227,8 +258,8 @@ def check(key: str, v, cfg: dict):
     if k == "arg" and _sub(kind) == "context":
         return _number(key, v, whole=True, lo=1024, hi=4 * TRAINED_CTX)
     if k == "arg" and _sub(kind) == "rope":
-        if v not in ("yarn", "linear"):
-            raise ValueError(f"{key}: expected yarn or linear, not {v!r}")
+        if v not in ROPE_METHODS:
+            raise ValueError(f"{key}: expected dynamic, yarn or linear, not {v!r}")
         return v
     if k == "arg":
         return _number(key, v, whole=True)
@@ -272,15 +303,22 @@ def apply(cfg: dict, changes: dict) -> tuple[dict, list[str]]:
             new["args"] = a + [kind[1]] if v else a
         elif isinstance(kind, tuple) and kind[0] == "arg":
             new["args"] = _put(list(new.get("args") or []), kind[1], v)
+            if key == "rope_scaling":                  # a method picked here is the user's; empty: the rule's
+                new.pop("rope_auto", None)
         elif v is None:
             new.pop(key, None)
         else:
             new[key] = v
         changed.append(key)
-    if "max_context" in changed or "rope_scaling" in changed:
+    # the rope follows the context, and an empty (automatic) or dynamic method the dialogs at once too
+    ctx = value_of(new, "max_context")
+    if "max_context" in changed or "rope_scaling" in changed or "parallel" in changed and isinstance(ctx, int) and \
+            ctx > TRAINED_CTX and (new.get("rope_auto") is True or value_of(new, "rope_scaling") == "dynamic"):
         _fit_rope(new, "rope_scaling" in changed and checked["rope_scaling"] is not None)
-        changed = [k for k in changed if value_of(new, k) != value_of(cfg, k)] + \
-            [k for k in ("rope_scaling",) if k not in changed and value_of(new, k) != value_of(cfg, k)]
+        rope = lambda c: (value_of(c, "rope_scaling"), _arg(c, "--rope-scaling", "text"))   # noqa: E731
+        changed = [k for k in changed if (rope(new) != rope(cfg) if k == "rope_scaling" else
+                                          value_of(new, k) != value_of(cfg, k))] + \
+            [k for k in ("rope_scaling",) if k not in changed and rope(new) != rope(cfg)]
     if any(k in changed for k in DIALOG_KEYS):
         _check_dialogs(new)
     return new, changed
@@ -300,22 +338,31 @@ def _put(a: list, flag: str, v) -> list:
 
 
 def _fit_rope(cfg: dict, explicit: bool):
-    """setup's rule (resolve_rope) for a context the page changed: past the trained context the extension is on
-    (yarn unless linear was picked) with the factor context / trained; within it --rope-scaling and --rope-scale go.
-    none past it is refused, as setup refuses it: positions the model never saw, rotated as if it had."""
+    """setup's rule (resolve_rope) for a context the page changed: past the trained context the extension is on with
+    the factor context / trained - the picked method, or, empty, dynamic where the engine runs it (one GPU, one dialog
+    at a time, 8-bit K/V) and yarn elsewhere ("rope_auto": true keeps it in step with "parallel"); within it
+    --rope-scaling and --rope-scale go.  none past it is refused, as setup refuses it: positions the model never saw,
+    rotated as if it had - and so is a picked dynamic the engine would refuse."""
     ctx, method = value_of(cfg, "max_context"), value_of(cfg, "rope_scaling")
     a = list(cfg.get("args") or [])
     if isinstance(ctx, int) and ctx > TRAINED_CTX:
-        if method not in (None, "yarn", "linear"):
+        if method not in (None, *ROPE_METHODS):
             raise ValueError(f"rope_scaling: a context of {ctx:,} is past the model's trained {TRAINED_CTX:,}, and "
-                             f"{method} keeps the trained angles there: pick yarn or linear, or a context of "
+                             f"{method} keeps the trained angles there: pick dynamic, yarn or linear, or a context of "
                              f"{TRAINED_CTX:,} or less")
-        a = _put(_put(a, "--rope-scaling", method or "yarn"), "--rope-scale", f"{ctx / TRAINED_CTX:g}")
+        why = dynamic_blocker(cfg)
+        if method == "dynamic" and why:
+            raise ValueError(f"rope_scaling: dynamic {why} - pick yarn or linear, or leave it empty (dynamic where "
+                             "it runs, else yarn)")
+        a = _put(_put(a, "--rope-scaling", method or ("yarn" if why else "dynamic")), "--rope-scale",
+                 f"{ctx / TRAINED_CTX:g}")
+        cfg["rope_auto"] = method is None
     elif explicit:
         raise ValueError(f"rope_scaling: a context of {ctx or 4096:,} fits the model's trained {TRAINED_CTX:,} - there "
                          "is nothing to extend (pick a larger context first)")
     else:
         a = _put(_put(a, "--rope-scaling", None), "--rope-scale", None)
+        cfg.pop("rope_auto", None)
     cfg["args"] = a
 
 
