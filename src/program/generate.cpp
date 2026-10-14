@@ -27,6 +27,7 @@
 #include "strata/core/conversation_disk.hpp"
 #include "strata/core/session_save_reclaim.hpp"
 #include "strata/core/conversation_memory.hpp"
+#include "strata/core/conversation_pressure.hpp"
 #include "strata/core/coupled_draft.hpp"
 #include "strata/core/expert_source.hpp"
 #include "strata/core/foresight_swap.hpp"
@@ -827,7 +828,8 @@ void usage() {
                  "  --conversation-cache-mib N  --serve: RAM budget for parked conversations (default 0 = off)\n"
                  "  --conversation-cache-slots N  --serve: at most N parked conversations (default 4)\n"
                  "  --conversation-cache-min-free-mib N  --serve: RAM floor (under MemAvailable, the cgroup limits and\n"
-                 "                       --memory-limit-mib) when parking, saving or restoring a session (default 2560)\n"
+                 "                       --memory-limit-mib) when parking, saving or restoring a session (default 2560);\n"
+                 "                       below it the parked conversations give RAM back, oldest first\n"
                  "  --memory-limit-mib N  --serve: the total RAM (MiB) this engine's container or cgroup may use, when\n"
                  "                       the container cannot see its real limit (also STRATA_MEMORY_LIMIT_MIB; the flag\n"
                  "                       wins; 0 = none). Parking and session save/restore keep their floor under it\n"
@@ -9153,20 +9155,17 @@ int main(int argc, char** argv) {
         if (!o.conversation_disk_dir.empty() && !conversations.enabled())
             std::fprintf(stderr, "strata serve: --conversation-disk-dir needs the conversation cache "
                                  "(--conversation-cache-mib, --conversation-cache-slots, --prompt-cache): off\n");
+        bool pressure_evicting = false;   // ram_pressure (below) is evicting: the disk tier flushes what it writes
         if (std::string disk_err; !conv_disk.open(disk_err))
             std::fprintf(stderr, "strata serve: conversation disk tier off: %s\n", disk_err.c_str());
         else if (conv_disk.enabled())
-            conversations.set_on_evict([&conv_disk](strata::core::SavedConversation&& image) {
+            conversations.set_on_evict([&conv_disk, &pressure_evicting](strata::core::SavedConversation&& image) {
                 // written to the disk while the engine was idle (the idle save): that copy stays, nothing to write
                 if (image.disk_id != 0 && conv_disk.has(image.disk_id)) return;
-                conv_disk.put(std::move(image));   // queued for the writer; a refusal is in its log
+                conv_disk.put(std::move(image), pressure_evicting);   // queued for the writer; a refusal is in its log
             });
         // freed images stay in malloc's heap, which MemAvailable does not count
-        auto return_freed_heap = [] {
-#if defined(__GLIBC__)
-            malloc_trim(0);
-#endif
-        };
+        auto return_freed_heap = [] { strata::core::conversation_return_freed_heap(); };
         // Room in RAM for `need` more bytes above `floor`: malloc's freed heap first, then the disk tier's queued
         // writes (their RAM comes back), then the RAM cache's oldest conversations.  `mem` keeps the last reading
         // for the caller's message.
@@ -11871,9 +11870,120 @@ int main(int argc, char** argv) {
                 if (!pump(false)) return false;
             return true;
         };
+        // RAM pressure (strata-nvfp4): a park is admitted against --conversation-cache-min-free-mib, but what is parked
+        // stayed when RAM ran short later.  Before a command, every STRATA_CONV_PRESSURE_MS (2000; 0 = off) while idle
+        // and between batch windows: below the floor the retained K/V, then the parked conversations oldest first (to
+        // the disk tier as any eviction, the file flushed; else dropped - read again when they come back), then the
+        // idle --batch slots' host checkpoints go until floor + STRATA_CONV_PRESSURE_HYST_MIB (1024) is free.  One
+        // line per event.
+        const int64_t pressure_ms = [] {
+            const char* e = std::getenv("STRATA_CONV_PRESSURE_MS");
+            return e ? (int64_t) std::atoll(e) : (int64_t) 2000;
+        }();
+        const uint64_t pressure_hyst = (uint64_t) [] {
+            const char* e = std::getenv("STRATA_CONV_PRESSURE_HYST_MIB");
+            return e ? std::max<long long>(0, std::atoll(e)) : 1024LL;
+        }() << 20;
+        auto slot_ram = [](const BSlot& sl) -> uint64_t {
+            uint64_t n = 0;
+            if (!sl.active && sl.cached && !sl.partial)   // a partial read continues with its checkpoints
+                for (const ConvCheckpoint& c : sl.checks) n += c.bytes();
+            return n;
+        };
+        auto pressure_held = [&]() -> uint64_t {
+            uint64_t n = conversations.bytes();
+            for (const BSlot& sl : bs) n += slot_ram(sl);
+            return n;
+        };
+        // an event with nothing left to release is said once: not again until a command ran or the held bytes changed
+        struct { bool on = false; uint64_t held = 0, gen = 0; } pressure_quiet;
+        Clock::time_point pressure_at = Clock::now();
+        auto ram_pressure = [&](const char* when) {
+            if (pressure_ms <= 0) return;
+            pressure_at = Clock::now();
+            const uint64_t held = pressure_held();
+            if (held == 0) { pressure_quiet.on = false; return; }
+            if (pressure_quiet.on && pressure_quiet.held == held && pressure_quiet.gen == live_gen) return;
+            auto quiet = [&](bool on) { pressure_quiet = {on, pressure_held(), live_gen}; };
+            // the disk tier's put allocates: a failure under this very pressure must not end the server (the image
+            // being handed over is freed as the exception unwinds)
+            try {
+                const uint64_t floor = (uint64_t) o.conversation_cache_min_free_mib << 20;
+                const auto t0 = Clock::now();
+                const auto r = strata::core::conversation_pressure_release(
+                    floor, pressure_hyst,
+                    []() -> std::optional<uint64_t> {
+                        const auto m = strata::core::sample_host_memory();
+                        return m ? std::optional<uint64_t>(m->available) : std::nullopt;
+                    },
+                    [&] {   // freed RAM back: the heap, the disk writer's queue (an image's RAM goes once written)
+                        return_freed_heap();
+                        if (conv_disk.pending()) conv_disk.wait_idle();
+                    },
+                    [&]() -> std::optional<strata::core::PressureUnit> {
+                        pressure_evicting = true;
+                        auto u = strata::core::conversation_cache_release_one(conversations);
+                        pressure_evicting = false;
+                        if (u) return u;
+                        BSlot* pick = nullptr;   // the idle slot that started its last request the longest ago
+                        for (BSlot& sl : bs)
+                            if (slot_ram(sl) != 0 && (pick == nullptr || sl.t0 < pick->t0)) pick = &sl;
+                        if (pick == nullptr) return std::nullopt;
+                        const uint64_t n = slot_ram(*pick);
+                        std::vector<ConvCheckpoint>().swap(pick->checks);   // its K/V and ids stay (VRAM)
+                        return strata::core::PressureUnit{n, false};
+                    },
+                    conversations.slots() + bs.size() + 1);
+                if (!r.below || (r.released() == 0 && !r.exhausted)) { quiet(false); return; }
+                const long long before = r.before ? (long long) (*r.before >> 20) : -1;
+                const long long after = r.after ? (long long) (*r.after >> 20) : -1;
+                if (r.released() != 0) {
+                    std::string what;
+                    if (r.dialogs != 0)
+                        what = std::string(conv_disk.enabled() ? " to the disk tier" : " dropped");
+                    if (r.others != 0)
+                        what += " + " + std::to_string(r.others) + " retained K/V or idle slot checkpoint set" +
+                                (r.others == 1 ? "" : "s");
+                    std::fprintf(stderr, "strata serve: conversation cache: RAM below the floor: released %zu dialog%s, %llu MiB "
+                                         "(%s) in %.0f ms; %s: %lld -> %lld MiB available, floor %lld MiB + %lld; parked=%zu%s\n",
+                                 r.dialogs, r.dialogs == 1 ? "" : "s", (unsigned long long) (r.bytes >> 20),
+                                 what.empty() ? "-" : what.c_str() + 1,
+                                 std::chrono::duration<double, std::milli>(Clock::now() - t0).count(), when, before, after,
+                                 (long long) o.conversation_cache_min_free_mib, (long long) (pressure_hyst >> 20),
+                                 conversations.size(), r.exhausted ? "; nothing left to release" : "");
+                } else {
+                    std::fprintf(stderr, "strata serve: conversation cache: RAM below the floor (%s: %lld MiB available, floor "
+                                         "%lld MiB): nothing left to release (parked=%zu: pinned shared prefixes stay)\n",
+                                 when, after, (long long) o.conversation_cache_min_free_mib, conversations.size());
+                }
+                quiet(r.exhausted);
+            } catch (const std::bad_alloc&) {
+                pressure_evicting = false;
+                std::fprintf(stderr, "strata serve: conversation cache: RAM below the floor (%s): an allocation failed while "
+                                     "releasing; going on (parked=%zu)\n", when, conversations.size());
+                quiet(true);
+            }
+        };
+        // a wait for the next line that wakes every pressure_ms for ram_pressure; `seconds` < 0: no limit.  False: the
+        // time ran out (or stdin ended), as next_line_for
+        auto idle_line = [&](std::string& out, double seconds) -> bool {
+            if (pressure_ms <= 0) return seconds < 0 ? next_line(out) : next_line_for(out, seconds);
+            const auto t0 = Clock::now();
+            for (;;) {
+                double slice = (double) pressure_ms / 1000.0;
+                if (seconds >= 0)
+                    slice = std::min(slice, std::max(0.0, seconds - std::chrono::duration<double>(Clock::now() - t0).count()));
+                if (next_line_for(out, slice)) return true;
+                if (input_waiting()) return seconds < 0 ? next_line(out) : false;   // stdin ended (or a line just came)
+                ram_pressure("idle");
+                if (seconds >= 0 && std::chrono::duration<double>(Clock::now() - t0).count() >= seconds) return false;
+            }
+        };
         for (;;) {
             if (batch_on() || (piped && pipe_inflight())) {
                 if (!try_next_line(line)) {
+                    if (pressure_ms > 0 && Clock::now() - pressure_at >= std::chrono::milliseconds(pressure_ms))
+                        ram_pressure("between batch windows");
                     if (!(piped ? pump(true) : batch_step())) return 1;
                     continue;
                 }
@@ -11883,13 +11993,13 @@ int main(int argc, char** argv) {
                 // --conversation-disk-sync-s: an idle stretch writes what the disk does not hold yet (disk_sync)
                 bool got = false;
                 if (sync_pending()) {
-                    got = next_line_for(line, (double) disk_sync_s);
+                    got = idle_line(line, (double) disk_sync_s);
                     if (!got && !input_waiting()) {
                         disk_sync(input_waiting, "idle");
                         continue;
                     }
                 }
-                if (!got && !next_line(line)) break;
+                if (!got && !idle_line(line, -1)) break;
             }
             // --batch: BSTOP <slot> ends that slot at its next batch window; BGEN <slot> <max_new> ... reads the
             // request's prompt and first token as a GEN 1, then continues it in that slot
@@ -11934,6 +12044,7 @@ int main(int argc, char** argv) {
                 Clock::now() - profile_saved_at >= std::chrono::duration<double>(o.expert_profile_save_min * 60.0))
                 save_profile("periodic");
             if (line == "QUIT") break;
+            ram_pressure("before a request");
             // the watchdog watches a request from here until this iteration ends, whichever way it ends
             struct BusyScope {
                 BusyScope() {
