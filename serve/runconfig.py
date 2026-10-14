@@ -156,7 +156,7 @@ def _context_view(cfg: dict, key: str) -> dict:
                 "choices": [[n, f"{n // 1024}K - {n:,}" + (" (the trained context)" if n == TRAINED_CTX else
                                                           " (RoPE extension)" if n > TRAINED_CTX else "")] for n in ns]}
     scale, now = _arg(cfg, "--rope-scale", "text"), _arg(cfg, "--rope-scaling", "text")
-    why = dynamic_blocker(cfg)
+    why = dynamic_blocker(cfg) or dynamic_untested(cfg)
     return {"kind": "enum", "default": f"default: {'yarn' if why else 'dynamic'} past {TRAINED_CTX:,}",
             "choices": list(ROPE_METHODS) + ([v] if v not in (None, *ROPE_METHODS) else []),
             "note": (f" - now: {now}, factor {scale}" if now is not None and scale is not None else "") +
@@ -185,6 +185,12 @@ def dynamic_blocker(cfg: dict, args: list | None = None) -> str | None:
     if str(env.get("STRATA_ROPE_TABLE", os.environ.get("STRATA_ROPE_TABLE", ""))).startswith("0"):
         return "needs the rope table (STRATA_ROPE_TABLE=0 is set)"
     return None
+
+
+def dynamic_untested(cfg: dict) -> str | None:
+    """Why the rule leaves dynamic RoPE out where the engine would run it: AMD (a HIP build), not measured there.  A
+    dynamic picked on the page is kept."""
+    return "is measured on NVIDIA only so far" if cfg.get("backend") == "hip" else None
 
 
 def view(cfg: dict, path: str | Path) -> dict:
@@ -340,7 +346,7 @@ def _put(a: list, flag: str, v) -> list:
 def _fit_rope(cfg: dict, explicit: bool):
     """setup's rule (resolve_rope) for a context the page changed: past the trained context the extension is on with
     the factor context / trained - the picked method, or, empty, dynamic where the engine runs it (one GPU, one dialog
-    at a time, 8-bit K/V) and yarn elsewhere ("rope_auto": true keeps it in step with "parallel"); within it
+    at a time, 8-bit K/V, NVIDIA) and yarn elsewhere ("rope_auto": true keeps it in step with "parallel"); within it
     --rope-scaling and --rope-scale go.  none past it is refused, as setup refuses it: positions the model never saw,
     rotated as if it had - and so is a picked dynamic the engine would refuse."""
     ctx, method = value_of(cfg, "max_context"), value_of(cfg, "rope_scaling")
@@ -354,7 +360,8 @@ def _fit_rope(cfg: dict, explicit: bool):
         if method == "dynamic" and why:
             raise ValueError(f"rope_scaling: dynamic {why} - pick yarn or linear, or leave it empty (dynamic where "
                              "it runs, else yarn)")
-        a = _put(_put(a, "--rope-scaling", method or ("yarn" if why else "dynamic")), "--rope-scale",
+        auto = "yarn" if why or dynamic_untested(cfg) else "dynamic"
+        a = _put(_put(a, "--rope-scaling", method or auto), "--rope-scale",
                  f"{ctx / TRAINED_CTX:g}")
         cfg["rope_auto"] = method is None
     elif explicit:

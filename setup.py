@@ -5420,16 +5420,19 @@ def parallel_recommend(vram_gbs, arena_gb: float, ctx: int, kv: str, streaming: 
     return best
 
 
-def parallel_note(asked: int | None, vram_gbs, arena_gb: float, ctx: int, kv: str, streaming: bool) -> list[str]:
+def parallel_note(asked: int | None, vram_gbs, arena_gb: float, ctx: int, kv: str, streaming: bool,
+                  rope_dynamic: bool = False) -> list[str]:
     """#465: what setup says about "parallel": the recommendation (or, where it would cost speed, why it is left at
-    one), or how the asked count compares with it (kept as asked: recommend, never force)."""
+    one), or how the asked count compares with it (kept as asked: recommend, never force).  `rope_dynamic`: the
+    config runs dynamic RoPE, which batch slots switch to yarn."""
     rec = parallel_recommend(vram_gbs, arena_gb, ctx, kv, streaming)
     slot = parallel_slot_gb(ctx, kv, streaming)
     if asked is None or asked <= 1:
         if not rec:
             return [f"Several requests at once: left at one at a time - {PARALLEL_COST_NOTE} (docs/BATCHING.md)."]
         return [f"Several requests at once (opt-in): --parallel {rec} decodes up to {rec} together instead of one "
-                f"after the other (each takes ~{slot:.1f} GB of VRAM from the expert cache; docs/BATCHING.md)."]
+                f"after the other (each takes ~{slot:.1f} GB of VRAM from the expert cache; docs/BATCHING.md)"
+                + ("; taking it switches RoPE from dynamic to yarn." if rope_dynamic else ".")]
     lines = [f"parallel requests: {asked} at once (each takes ~{slot:.1f} GB of VRAM from the expert cache, "
              f"{asked * slot:.1f} GB in all)"]
     if asked > PARALLEL_MAX:
@@ -5649,6 +5652,7 @@ def derived_factor(ctx: int, trained: int = 262144) -> float:
 
 
 ROPE_DYNAMIC_ENGINE = (0, 1, 44, 1, 1)   # the first fork release with --rope-scaling dynamic (0.1.44-nvfp4.1 had none)
+ROPE_DYNAMIC_HIP = "is measured on NVIDIA only so far"   # AMD (HIP): setup picks yarn, an explicit dynamic is kept
 
 
 def rope_dynamic_blocker(gpus: int = 1, parallel=None, kv=None, meta: dict | None = None) -> str | None:
@@ -5669,14 +5673,16 @@ def rope_dynamic_blocker(gpus: int = 1, parallel=None, kv=None, meta: dict | Non
     return None
 
 
-def resolve_rope(ctx: int, scaling, scale, trained: int = 262144, blocker: str | None = None):
+def resolve_rope(ctx: int, scaling, scale, trained: int = 262144, blocker: str | None = None,
+                 untested: str | None = None):
     """The rope config for the context ACTUALLY SERVED: (scaling, scale); scaling None = no scaling flags.
 
     An explicit --rope-scaling/--rope-scale always wins - a user-supplied factor is kept verbatim even
     when a reduction changed the context.  Past the trained range an omitted method defaults to dynamic -
     none while a dialog fits the trained range, yarn with the factor its length needs past it (at most
     --rope-scale), so short dialogs run the trained angles bit for bit - and to yarn where the engine would
-    refuse dynamic (`blocker`, rope_dynamic_blocker's reason: several GPUs, parallel dialogs, 4-bit K/V).
+    refuse dynamic (`blocker`, rope_dynamic_blocker's reason: several GPUs, parallel dialogs, 4-bit K/V) or where
+    it is not measured (`untested`: AMD - an explicit dynamic is kept there).
     yarn is llama.cpp's extension method: the trained angles survive on the high-frequency pairs and the
     magnitude correction keeps the attention temperature.  An omitted factor is derived from the final
     context (final / trained, at least 1), as is an explicitly chosen method's missing factor inside the
@@ -5699,7 +5705,8 @@ def resolve_rope(ctx: int, scaling, scale, trained: int = 262144, blocker: str |
     if scaling == "dynamic" and blocker:
         raise ValueError(f"--rope-scaling dynamic {blocker}: the engine would refuse it at start. Pick --rope-scaling "
                          "yarn or linear, or leave it out (dynamic where it runs, else yarn)")
-    return scaling or ("yarn" if blocker else "dynamic"), scale if scale is not None else derived_factor(ctx, trained)
+    return scaling or ("yarn" if blocker or untested else "dynamic"), \
+        scale if scale is not None else derived_factor(ctx, trained)
 
 
 def engine_meta_of(cfg: dict) -> dict | None:
@@ -5713,7 +5720,8 @@ def engine_meta_of(cfg: dict) -> dict | None:
 
 def fit_auto_rope(cfg: dict) -> str | None:
     """A run config whose RoPE method setup chose by itself ("rope_auto": true) kept in step with the config: dynamic,
-    or yarn where the engine would refuse dynamic (several GPUs, "parallel" above 1, 4-bit K/V, an engine without it).
+    or yarn where the engine would refuse dynamic (several GPUs, "parallel" above 1, 4-bit K/V, an engine without it)
+    or where it is not measured (AMD).
     The line to say when it changed the method, else None.  An explicit dynamic the engine would refuse raises
     ValueError naming why; any other explicit method is left as it is."""
     args = cfg.get("args") if isinstance(cfg.get("args"), list) else []
@@ -5731,6 +5739,7 @@ def fit_auto_rope(cfg: dict) -> str | None:
             raise ValueError(f"--rope-scaling dynamic {why}: the engine would refuse it at start. Run setup again "
                              "with --rope-scaling yarn, or without --rope-scaling (dynamic where it runs, else yarn)")
         return None
+    why = why or (ROPE_DYNAMIC_HIP if cfg.get("backend") == "hip" else None)
     want = "yarn" if why else "dynamic"
     if args[i] == want:
         return None
@@ -5738,12 +5747,13 @@ def fit_auto_rope(cfg: dict) -> str | None:
     return f"rope scaling: {want}" + (f" - dynamic RoPE {why}" if why else " (one GPU, one dialog at a time)")
 
 
-def ask_rope(a, ctx: int, blocker: str | None):
+def ask_rope(a, ctx: int, blocker: str | None, untested: str | None = None):
     """(method, factor, auto) for `ctx`: resolve_rope's config, and whether setup chose the method itself (the
     config's "rope_auto": fit_auto_rope keeps it in step).  Past the trained 262144, when interactive and no
-    --rope-scaling was given: one question, the recommended method preselected - taking it is setup's own choice."""
+    --rope-scaling was given: one question, the recommended method preselected - taking it is setup's own choice.
+    `untested` (AMD): yarn is recommended, dynamic still offered and kept when chosen."""
     scaling = a.rope_scaling
-    rec = "yarn" if blocker else "dynamic"
+    rec = "yarn" if blocker or untested else "dynamic"
     if ctx > 262144 and scaling is None and not a.yes:
         say()
         say(f"  A {ctx // 1024}K context runs the model past its trained 262,144 positions: the rotary angles")
@@ -5752,12 +5762,14 @@ def ask_rope(a, ctx: int, blocker: str | None):
         say("  short ones too (it keeps the trained angles on the high-frequency pairs); linear shrinks every angle.")
         if blocker:
             say(f"  dynamic {blocker}, so it is not offered here.")
+        elif untested:
+            say(f"  dynamic RoPE {untested}: yarn is recommended here.")
         say("  Override any time with --rope-scaling.")
-        picked = ask("RoPE extension method?", ["yarn", "linear"] if blocker else ["dynamic", "yarn", "linear"],
-                     rec, a.yes)
+        picked = ask("RoPE extension method?", ["yarn", "linear"] if blocker else
+                     ["yarn", "dynamic", "linear"] if untested else ["dynamic", "yarn", "linear"], rec, a.yes)
         scaling = None if picked == rec else picked
     try:
-        method, scale = resolve_rope(ctx, scaling, a.rope_scale, blocker=blocker)
+        method, scale = resolve_rope(ctx, scaling, a.rope_scale, blocker=blocker, untested=untested)
     except ValueError as e:
         fail(str(e))
     if method is not None:
@@ -5765,8 +5777,10 @@ def ask_rope(a, ctx: int, blocker: str | None):
                   else "as requested")
         ok(f"rope scaling: dynamic - none while a dialog fits 262,144 tokens, past it yarn up to factor {scale:g} "
            f"({origin})" if method == "dynamic" else f"rope scaling: {method}, factor {scale:g} ({origin})")
-        if scaling is None and blocker:
-            say(f"  yarn instead of dynamic RoPE, which {blocker}")
+        if scaling is None and (blocker or untested):
+            say(f"  yarn instead of dynamic RoPE, which {blocker or untested}")
+        elif method == "dynamic" and untested:
+            say(f"  dynamic RoPE {untested}: kept as you chose")
     return method, scale, scaling is None and method is not None
 
 
@@ -7565,7 +7579,8 @@ def main() -> int:
         ok(f"KV cache: {'8-bit' if kv == 'int8' else '4-bit (Hadamard-rotated)'}")
     # past the trained 262144: dynamic RoPE where the engine runs it (one GPU, one dialog at a time, 8-bit K/V), else
     # yarn; one question when interactive (ask_rope).  With --yes nothing prints but the ok() line.
-    scaling, rope_scale, rope_auto = ask_rope(a, ctx, rope_dynamic_blocker(len(multi) or 1, a.parallel, kv))
+    scaling, rope_scale, rope_auto = ask_rope(a, ctx, rope_dynamic_blocker(len(multi) or 1, a.parallel, kv),
+                                              ROPE_DYNAMIC_HIP if hip else None)
     if MODELS[model].get("vision", fam.get("vision")) is False:     # UD-IQ4_XS: images, unlike UD-Q4_K_XL
         vision = "none"
         if a.vision not in (None, "no", "none"):
@@ -8088,7 +8103,8 @@ def main() -> int:
         say(f"  Image generation: POST http://127.0.0.1:{port}/v1/images/generations (OpenAI's images API)")
     if a.parallel is None:                             # #465: the opt-in, said once (nothing changes)
         for line in parallel_note(None, [g.get("vram_gb", 0.0) for g in chosen], MODELS[model]["arena_gb"], ctx, kv,
-                                  "--kv-resident" in cfg["args"]):
+                                  "--kv-resident" in cfg["args"],
+                                  flag_value(cfg["args"], "--rope-scaling") == "dynamic"):
             say("  " + line)
     if tuned is False:                                 # #447: a failed tuning is repeated here, not only above
         say("  Tuning:           FAILED (the reason is above): the default settings stay - "
