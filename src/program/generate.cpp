@@ -2418,10 +2418,11 @@ int main(int argc, char** argv) {
                                o.expert_cache_remote[2] > 0;
     // A layer split keeps the resident RAM mode: every stage's GPU cache is left out of the RAM copy, and an adaptive
     // swap copies an evicted expert back from the card that owns its layer (resident_stage_swaps).
-    if (o.resident_cpu_experts && remote_caches) {
-        std::fprintf(stderr, "strata generate: --resident-cpu-experts does not support remote expert caches\n");
-        return 2;
-    }
+    // #1184 (part 3, ported): the helper-GPU caches are allowed beside the resident RAM mode.  Their experts are
+    // left out of the RAM copy like a split stage's (the stage_pairs block before pin_cache_complement), the
+    // helpers' refills read through the source (the RAM copy when it holds the bytes), and the two adaptive tiers
+    // already keep each other's experts out (helper_holds in the primary's candidates, RemoteExpertOpt::owns).
+    (void) remote_caches;
     // the helper-GPU expert caches (--expert-cache-remote, docs/SECOND_GPU.md): CUDA1..3 on one GPU; with a layer
     // split, the visible GPUs no stage runs on, in order
     int remote_dev[3] = {1, 2, 3};
@@ -7034,6 +7035,23 @@ int main(int argc, char** argv) {
             for (int64_t l = st->lb; l < st->le; ++l)
                 for (int64_t e = 0; e < g.n_expert; ++e)
                     if (st->cache.slot_of(l, e) >= 0) stage_pairs.emplace_back((int32_t) l, (int32_t) e);
+        // #1184: a helper GPU's experts are left out of the RAM copy as a stage's are - the RAM that duplication
+        // would take goes to colder experts instead (with --resident-budget-gib: more of the model off the files).
+        {
+            size_t helper_pairs = 0;
+            for (int r = 0; r < 3; ++r) {
+                if (o.expert_cache_remote[(size_t) r] <= 0) continue;
+                for (int64_t l = 0; l < g.n_layers; ++l)
+                    for (int64_t e = 0; e < g.n_expert; ++e)
+                        if (remote_experts[(size_t) r].holds(l, (int32_t) e)) {
+                            stage_pairs.emplace_back((int32_t) l, (int32_t) e);
+                            ++helper_pairs;
+                        }
+            }
+            if (helper_pairs > 0)
+                std::fprintf(stderr, "strata generate: resident RAM mode: %zu experts held by the helper GPU caches are "
+                                     "left out of the RAM copy (#1184)\n", helper_pairs);
+        }
         // The split's lend regions.  The serve scan lends the tail slots of EVERY part's cache - CUDA0's own
         // part first, then every stage (the `pf_parts` loop below) - and `lend_from` above is switched off in
         // pin_cache_complement the moment `additional_gpu_pairs` is non-empty, so until now none of those experts
