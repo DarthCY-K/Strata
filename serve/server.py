@@ -8303,6 +8303,10 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
         raise SystemExit(f"[strata] config \"env_to_user\" must be true or false, not {etu!r}")
     import serve.frontend as _frontend
     _frontend.ENV_TO_USER = etu
+    ccp = cfg.get("claude_code_prompt", "local")       # see frontend.local_claude_code_system
+    if ccp not in ("local", "as_sent"):
+        raise SystemExit(f"[strata] config \"claude_code_prompt\" must be \"local\" or \"as_sent\", not {ccp!r}")
+    _frontend.CLAUDE_CODE_PROMPT = ccp
     repair = cfg.get("tool_name_repair", False)         # opt-in: see OutputParser's repair_names
     if not isinstance(repair, bool):
         raise SystemExit(f"[strata] config \"tool_name_repair\" must be true or false, not {repair!r}")
