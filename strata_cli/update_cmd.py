@@ -24,6 +24,13 @@ from pathlib import Path
 #: one-line installers use). Only a feed signed with a key in update_keys.json (or STRATA_UPDATE_TRUSTED_KEYS) is accepted.
 DEFAULT_FEED = "https://github.com/Niko1221/Strata/releases/latest/download/strata-feed.json"
 ENV_FEED = "STRATA_UPDATE_FEED"
+#: strata-nvfp4 (this fork): DEFAULT_FEED is upstream's, and its engines are upstream's - an install of this fork must not
+#: switch to them by a plain `strata update`.  The feed is used only when named (--feed, STRATA_UPDATE_FEED, or one chosen
+#: before); this fork's own engine comes with its release zip (update.cmd) or setup.py (UPDATE.bat, START-HERE.bat).
+FORK_NO_DEFAULT_FEED = ("this is the strata-nvfp4 fork: `strata update` would install upstream's engine from its signed feed "
+                        "(%s), not this fork's. This fork's engine comes with its release (update.cmd in the release "
+                        "folder, or UPDATE.bat / setup.py --update in a clone). To use a feed anyway, name it: "
+                        "--feed URL or STRATA_UPDATE_FEED" % DEFAULT_FEED)
 ENV_APP_VERSION = "STRATA_APP_VERSION"
 
 
@@ -91,7 +98,13 @@ def _feed_source(a, root: Path) -> str:
     if os.environ.get(ENV_FEED):
         return os.environ[ENV_FEED]
     remembered = (updater.State(root).data.get("feed") or {}).get("source")
-    return remembered or DEFAULT_FEED
+    if remembered and remembered != DEFAULT_FEED:
+        return remembered
+    raise ForkFeedRefused(FORK_NO_DEFAULT_FEED)   # strata-nvfp4: never upstream's feed by default
+
+
+class ForkFeedRefused(Exception):
+    """strata-nvfp4: no feed was named, and the default one is upstream's (exit 5, refused)."""
 
 
 def _mib(n: int | None) -> str:
@@ -219,6 +232,8 @@ def run(a) -> int:
     except feedmod.FeedError as exc:
         return fail(str(exc), exc.exit_code)
     except signing.SignatureError as exc:
+        return fail(str(exc), 5)
+    except ForkFeedRefused as exc:
         return fail(str(exc), 5)
     except acquisition.AcquisitionRefused as exc:
         return fail(f"{exc} (the update is the one explicit step that downloads; run it from a shell where STRATA_NO_ACQUIRE is not set)", 5)
