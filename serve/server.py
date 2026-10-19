@@ -2481,6 +2481,40 @@ def gpu_list(cfg: dict) -> list[int]:
     return [int(str(x).strip()) for x in items if str(x).strip() != ""]
 
 
+def gpu_any_busy(now: dict, threshold: float = 10) -> bool:
+    """#1317's "the GPU is working", read per card: with several cards gpu_util is their mean, so one busy card next
+    to an idle helper would read as half as busy - any card at or above the threshold counts."""
+    utils = [g.get("util") for g in (now.get("gpus") or [])] or [now.get("gpu_util")]
+    return any((u or 0) >= threshold for u in utils)
+
+
+def monitor_gpu_list(cfg: dict) -> list[int]:
+    """The cards the Monitor reads (nvidia-smi numbering).  "monitor_gpus": [0, 1] names them outright.  Without it:
+    the config's "gpu" cards, plus the cards the engine also uses outside that list - a helper expert cache
+    (--expert-cache-device1..3 = CUDA1..3 of the engine's CUDA_VISIBLE_DEVICES) and the image encoder's own
+    "cuda_device" - so a helper card's VRAM, load and heat are not hidden.  [] when nothing names a card."""
+    m = cfg.get("monitor_gpus")
+    if m is not None and m != "":
+        items = m if isinstance(m, (list, tuple)) else str(m).split(",")
+        return list(dict.fromkeys(int(str(x).strip()) for x in items if str(x).strip() != ""))
+    base = gpu_list(cfg)
+    out = list(base)
+    args = [str(x) for x in (cfg.get("args") or [])]
+    helpers = sorted({int(a[-1]) for a in args if re.fullmatch(r"--expert-cache-device[1-3]", a)})
+    if helpers:
+        cvd = str((cfg.get("env") or {}).get("CUDA_VISIBLE_DEVICES") or "")
+        visible = [int(x) for x in cvd.split(",") if x.strip().isdigit()] if cvd else (base or [])
+        for k in helpers:
+            if k < len(visible):
+                out.append(visible[k])
+    dev = (cfg.get("vision") or {}).get("cuda_device")
+    if dev is not None and str(dev).strip().isdigit() and cfg.get("backend") != "hip":
+        out.append(int(dev))
+    if not base and out:
+        out.insert(0, 0)                               # the engine's own card is CUDA0 when "gpu" names none
+    return list(dict.fromkeys(out))
+
+
 def engine_binary(exe: str, cfg: dict | None = None) -> str:
     """The file that holds the engine's own option strings, for a feature check that reads it.  The Intel launcher
     (sycl/serve/strata-sycl.sh) is a shell script that runs its repo's STRATA_SYCL_BIN (default build-sycl-aot/strata)
@@ -3574,7 +3608,7 @@ class Service:
             if getattr(self, "engine", None) is not None and hasattr(self.engine, "gpu_busy"):
                 # #1317: the quick frozen-engine check does not end an engine whose GPU is busy (a long prompt chunk on a
                 # slow card keeps the GPU at work while the host thread sleeps)
-                self.engine.gpu_busy = lambda: (self.telemetry.snapshot()["now"].get("gpu_util") or 0) >= 10
+                self.engine.gpu_busy = lambda: gpu_any_busy(self.telemetry.snapshot()["now"])
 
     def _tok_s(self):
         """tok/s over the last RATE_WINDOW_S seconds.  Returns 0.0 while nothing is generating.  With parallel requests:
@@ -6897,6 +6931,10 @@ def main() -> int:
     svc.reasoning_loop_recovery = recovery
     svc.gpu_index = (gpu_list(cfg) or [0])[0]           # the Monitor reads the card the engine runs on (issue #51)
     svc.gpu_indices = gpu_list(cfg)                     # ... or every card of a layer split (issue #112)
+    mon = monitor_gpu_list(cfg)                         # ... plus a helper/vision card ("monitor_gpus" to name them)
+    if len(mon) > len(svc.gpu_indices):
+        svc.gpu_indices = mon
+        print(f"[strata] Monitor reads GPUs {mon}", flush=True)
     if a.engine == "strata" and groups:                 # replicas: every card of every group
         svc.gpu_indices = [c for g in groups for c in g]
         svc.gpu_index = svc.gpu_indices[0]

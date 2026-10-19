@@ -5619,3 +5619,29 @@ class PrepareCancelled(unittest.TestCase):
             ids, _, _ = svc.prepare(self.msgs(), None, {}, cancel=threading.Event())
             self.assertEqual(ids.count(ByteTokenizer().encode("<|image_pad|>", parse_special=True)[0]), 6)
             svc.embeddings.path.unlink(missing_ok=True)
+
+
+class MonitorGpus(unittest.TestCase):
+    def test_helper_and_vision_cards_are_read(self):
+        from serve.server import monitor_gpu_list
+        cfg = {"gpu": [0], "args": ["--expert-cache-device1", "auto"], "env": {"CUDA_VISIBLE_DEVICES": "0,1"}}
+        self.assertEqual(monitor_gpu_list(cfg), [0, 1])
+        self.assertEqual(monitor_gpu_list({"gpu": [0], "vision": {"cuda_device": 2}}), [0, 2])
+        self.assertEqual(monitor_gpu_list({"gpu": [2], "args": ["--expert-cache-device1", "4"],
+                                           "env": {"CUDA_VISIBLE_DEVICES": "2,0"}}), [2, 0])
+        self.assertEqual(monitor_gpu_list({"gpu": [0], "args": ["--expert-cache-device1", "auto"]}), [0])
+
+    def test_explicit_and_unchanged(self):
+        from serve.server import monitor_gpu_list
+        self.assertEqual(monitor_gpu_list({"gpu": [0], "monitor_gpus": [0, 1, 1]}), [0, 1])
+        self.assertEqual(monitor_gpu_list({"gpu": "0", "monitor_gpus": "0,3"}), [0, 3])
+        self.assertEqual(monitor_gpu_list({"gpu": [0, 3]}), [0, 3])
+        self.assertEqual(monitor_gpu_list({}), [])
+        self.assertEqual(monitor_gpu_list({"backend": "hip", "gpu": [0], "vision": {"cuda_device": 1}}), [0])
+
+    def test_any_card_busy(self):
+        from serve.server import gpu_any_busy
+        self.assertTrue(gpu_any_busy({"gpu_util": 6, "gpus": [{"util": 12}, {"util": 0}]}))
+        self.assertFalse(gpu_any_busy({"gpu_util": 4, "gpus": [{"util": 8}, {"util": None}]}))
+        self.assertTrue(gpu_any_busy({"gpu_util": 40}))
+        self.assertFalse(gpu_any_busy({}))
