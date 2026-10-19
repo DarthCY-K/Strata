@@ -1,0 +1,28 @@
+{
+  "zh_prose": {
+    "prompt": 25,
+    "read": 25,
+    "prefill_tps": 146.6,
+    "hit_rate": 86.8
+  },
+  "code_zh": {
+    "prompt": 27,
+    "read": 27,
+    "prefill_tps": 146.3,
+    "hit_rate": 85.8
+  },
+  "long_needle": {
+    "prompt": 507266,
+    "read": 507266,
+    "prefill_tps": 6037.6,
+    "hit_rate": 64.3
+  },
+  "vision_红": "红",
+  "vision_蓝": "蓝",
+  "tool": true,
+  "gpu": [
+    "0, 501 MiB, 23534 MiB",
+    "1, 1171 MiB, 14771 MiB"
+  ],
+  "kernel_clean": true
+}
