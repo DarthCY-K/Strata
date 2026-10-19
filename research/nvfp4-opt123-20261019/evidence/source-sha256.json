@@ -1,0 +1,12 @@
+{
+  "CMakeLists.txt": "1095d100ca1c732970b71ba840fbe6bcabc298dcfc7bc603b4781e13333a1e93",
+  "include/strata/core/remote_expert_opt.hpp": "1d97e19c9badd675e10c7af8803246fc6a38311f7c2588ba17a091ff7b0e27c7",
+  "include/strata/core/remote_experts.hpp": "0b6088dc69fe60ed63eefee5c720fefe1b64abc6f6e5554e8717377ba042bb23",
+  "include/strata/kernels/cpu/pool.hpp": "07b339a2eefccea165e4b51a4c754cefe2fce3aca5a307f8df70b9f2c08e2872",
+  "include/strata/kernels/qsa_decode_attn.hpp": "068ef9a43de4b1e5f40e397524ec9330f1ed663359c67ac7d1eab6b0607f9779",
+  "src/core/remote_expert_opt.cu": "22fc7084c5fde4062cd941eb71bece730434f5d44376fb58ce58f6210a2b5aa2",
+  "src/kernels/cpu/pool.cpp": "3b5972478dabbe7dc9c102ea1811fae74a80979978bbc74c60d8096d482c52aa",
+  "src/kernels/cuda/qsa_decode_attn.cu": "ffd440dcbda442bfb094c421be1f9ec3d598e1ee8d3cbb5a31baacbe36bd6fb9",
+  "src/program/generate.cpp": "77d3bec3d90230e07f20ffdb724afa093dd2a89d86deebdc45e068c71b339e2d",
+  "sycl/src/program/generate.cpp": "a5864a1daa56f5e0e961d69ff5696f27f0695d26c5778aa37f891e7804faa641"
+}

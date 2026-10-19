@@ -35,13 +35,14 @@ public:
 
 private:
     friend class RemoteExperts;
+    friend struct RemoteReduceTestAccess; // standalone CUDA test; no model/cache allocation
     static size_t metadata_bytes();
     bool active() const { return weights_ != nullptr; }
     void prepare(const RemoteExperts& remote, void* metadata) const;
     bool reduce(RemoteExperts& remote, const void* metadata, std::string& err);
     void accumulate(const RemoteExperts& remote);
 
-    struct Peer { RemoteExperts* remote; float* sum = nullptr; };
+    struct Peer { RemoteExperts* remote; float* sum = nullptr; bool reduce_traced = false; };
     std::vector<Peer> peers_;
     float* h_sum_ = nullptr;
     float* m_sum_ = nullptr;

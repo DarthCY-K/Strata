@@ -1,0 +1,54 @@
+{
+  "arms": [
+    [
+      "base_a",
+      "base"
+    ],
+    [
+      "attn_a",
+      "attn"
+    ],
+    [
+      "helper_a",
+      "helper"
+    ],
+    [
+      "all_a",
+      "all"
+    ],
+    [
+      "pool_a",
+      "pool"
+    ],
+    [
+      "pool_b",
+      "pool"
+    ],
+    [
+      "all_b",
+      "all"
+    ],
+    [
+      "helper_b",
+      "helper"
+    ],
+    [
+      "attn_b",
+      "attn"
+    ],
+    [
+      "base_b",
+      "base"
+    ]
+  ],
+  "candidate": "/root/strata/releases/strata-nvopt123-20261019a",
+  "candidate_sha256": "515323016545d8e3185883e02ce78f28b897f0b43f683616a3d00151394af7d8",
+  "baseline": "/root/strata/releases/strata-nvfp4-pa-20261019-1729",
+  "seed": 20261019,
+  "params": {
+    "temperature": 0,
+    "reasoning_effort": "medium",
+    "max_tokens": 900
+  },
+  "note": "Screening: two clean processes per kind; not a thousand-request soak or full quality suite"
+}

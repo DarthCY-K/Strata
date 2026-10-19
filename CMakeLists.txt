@@ -421,6 +421,18 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     add_test(NAME qsa_topk_active_parity COMMAND qsa_topk_active_parity)
     set_tests_properties(qsa_topk_active_parity PROPERTIES SKIP_RETURN_CODE 77)
   endif()
+  # Standalone opt-in parity target: keep the NVFP4 source bundle's full tests optional.
+  option(STRATA_PARITY_ATTN_DAILY "Build ATTN_DAILY bitwise parity test" OFF)
+  if((STRATA_BUILD_TESTS OR STRATA_PARITY_ATTN_DAILY) AND STRATA_ENABLE_CUDA)
+    enable_testing()
+    add_executable(qsa_merge_daily_parity src/kernels/qsa_merge_daily_parity.cpp)
+    target_include_directories(qsa_merge_daily_parity PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+    target_link_libraries(qsa_merge_daily_parity PRIVATE strata_kernels CUDA::cudart)
+    add_test(NAME qsa_merge_daily_parity_default COMMAND qsa_merge_daily_parity)
+    add_test(NAME qsa_merge_daily_parity_daily COMMAND qsa_merge_daily_parity)
+    set_tests_properties(qsa_merge_daily_parity_default PROPERTIES ENVIRONMENT "STRATA_ATTN_DAILY=0;STRATA_ATTN_PRE75=1;STRATA_ATTN_MERGE_V2=0;STRATA_ATTN_LANECELL=0" SKIP_RETURN_CODE 77)
+    set_tests_properties(qsa_merge_daily_parity_daily PROPERTIES ENVIRONMENT "STRATA_ATTN_DAILY=1;STRATA_ATTN_PRE75=1;STRATA_ATTN_MERGE_V2=1;STRATA_ATTN_LANECELL=0" SKIP_RETURN_CODE 77)
+  endif()
   # the QSA selection (block scores on the warp kernel and the tensor-core one, top-k): a GPU bench with a
   # scorer-vs-scorer comparison and an FP64 accuracy gate (synthetic, no model); the ctest runs a 32K context under a
   # 262144-cell capacity (the top-k dispatch follows the capacity) and exits non-zero on a failed gate
@@ -1409,6 +1421,9 @@ if(STRATA_NATIVE_EXPERTS)
   add_executable(router_dot_parity src/kernels/cpu/router_dot_parity.cpp)
   target_link_libraries(router_dot_parity PRIVATE strata_kernels_cpu)
   if(STRATA_BUILD_TESTS)
+    # Explicit real-pack test; no synthetic fallback or model download in ctest.
+    add_executable(pool_fused_nvfp4_test src/kernels/cpu/pool_fused_nvfp4_test.cpp)
+    target_link_libraries(pool_fused_nvfp4_test PRIVATE strata_kernels_cpu)
     add_executable(pool_tasks_test src/kernels/cpu/pool_tasks_test.cpp)
     target_link_libraries(pool_tasks_test PRIVATE strata_kernels_cpu)
     add_test(NAME pool_tasks_test COMMAND pool_tasks_test)

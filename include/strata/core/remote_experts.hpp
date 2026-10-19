@@ -64,6 +64,7 @@ public:
 
 private:
     friend class RemoteExpertOpt;
+    friend struct RemoteReduceTestAccess; // standalone CUDA test; no model/cache allocation
     RemoteExpertOpt* remote_opt_ = nullptr;
     int device_ = -1;
     int64_t n_expert_ = 0;

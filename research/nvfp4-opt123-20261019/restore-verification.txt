@@ -1,0 +1,5 @@
+production_config_byte_identical True
+models {"object": "list", "data": [{"id": "Qwen3.8-Flash-Next", "object": "model", "status": {"value": "loaded"}, "meta": {"n_ctx": 262144}, "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}}]}
+kernel_error_scan {"returncode": 0, "hits": []}
+0, NVIDIA GeForce RTX 5090 D v2, 503 MiB, 23532 MiB
+1, NVIDIA GeForce RTX 5060 Ti, 273 MiB, 15670 MiB
