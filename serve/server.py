@@ -3561,6 +3561,7 @@ class Service:
         # turn before the answer instead of the top of the prompt, so switching it keeps the cached conversation
         self.effort_end = False
         self.conv_log = ConvCacheLog()                  # #596: the parked conversations, from the engine's log
+        self.update_notice = None                       # this fork: a newer release (start_update_check), or None
         self.config_path = None                         # #564: the run config the web page's Settings view edits
         self.config_lock = threading.Lock()
         # #321: browser pages of these origins may call /v1/* (CORS; "*" = any page - only with an api_key that
@@ -4385,7 +4386,7 @@ class Service:
         parked = self.conv_log.poll(getattr(self.engine, "log_path", None), getattr(self.engine, "log_start", None))
         return {"engine": engine, "live": live, "requests": hist[::-1][:None if all_requests else 12],
                 "conversation_cache": conversation_cache_view(engine, hist, totals, parked),
-                "gpus": self.gpu_view(),
+                "gpus": self.gpu_view(), "update": self.update_notice,
                 "requests_kept": len(hist), "totals": totals, "hardware": tel["now"],
                 "hardware_static":
                 tel["static"], "history": tel["history"], "time": now}
@@ -4448,6 +4449,7 @@ class Service:
             "structured_output": {"formats": ["json_object", "json_schema"], "method": "prompt_and_validate",
                                   "constrained_decoding": False, "stream_buffered": True},
             "engine": (getattr(self.engine, "info", {}) or {}).get("version"),
+            "update": self.update_notice,                # this fork: a newer strata-nvfp4 release, or null
             "started": int(self.started_at), "uptime_s": int(time.time() - self.started_at),
             "cache_max_tokens": ctx,
             "context": {"native": ctx, "max_positions": ctx},
@@ -7855,7 +7857,7 @@ def with_component_engine(cfg: dict) -> dict:
     # strata-nvfp4: said, not refused - the engine component is the app's / Terminal's (upstream's signed feed); this
     # fork's own run configs name engine/strata.exe
     print("[strata] this run config names the engine component (\"component:strata-engine\": the engine the app or "
-          "`strata update` installed from upstream's feed), not this strata-nvfp4 release's engine\\strata.exe",
+          "`strata update --feed` installed from upstream's feed), not this strata-nvfp4 release's engine\\strata.exe",
           file=sys.stderr, flush=True)
     cfg = dict(cfg)
     cfg["exe"] = _component_exe(cfg["exe"], cfg)
@@ -7871,6 +7873,32 @@ def _component_exe(reference: str, cfg: dict) -> str:
     except engine_component.EngineMissing as e:
         print(f"[strata] {e}", file=sys.stderr, flush=True)
         raise SystemExit(e.exit_code) from None
+
+
+def start_update_check(svc, cfg: dict, exe: str, offline: bool = False, check=None,
+                       owned: bool = False) -> threading.Thread | None:
+    """strata-nvfp4: is a newer release of this fork published?  On a thread of its own, so neither the start nor a
+    request waits: GitHub is asked at most once a day (strata_control/fork_release.py, a read-only version query - it
+    never downloads or installs).  A newer one is one line here and a field of /metrics and /v1/status (the web page's
+    notice).  Off: STRATA_UPDATE_CHECK=0, "update_check": false, --offline, and `owned` (--owner-fd: a server the
+    Terminal's or the app's runtime started, an engine update's test start among them)."""
+    from strata_control import fork_release
+    if owned or fork_release.disabled(cfg, os.environ, offline):
+        return None
+    check = check or fork_release.check
+
+    def run():
+        try:
+            n = check(ROOT, exe)
+        except Exception:  # noqa: BLE001 - a notice never stops the server
+            return
+        svc.update_notice = fork_release.web_view(n)
+        line = fork_release.log_line(n)
+        if line:
+            print(line, flush=True)
+    t = threading.Thread(target=run, daemon=True, name="strata-update-check")
+    t.start()
+    return t
 
 
 def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> int:
@@ -8226,6 +8254,8 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
     svc.stop_token_text = cfg.get("stop_token_text") is not False   # EOS literal: on unless the config says false
     if cfg.get("prevent_sleep") is not None and not isinstance(cfg["prevent_sleep"], bool):
         raise SystemExit(f"[strata] config \"prevent_sleep\" must be true or false, not {cfg['prevent_sleep']!r}")
+    if cfg.get("update_check") is not None and not isinstance(cfg["update_check"], bool):   # this fork
+        raise SystemExit(f"[strata] config \"update_check\" must be true or false, not {cfg['update_check']!r}")
     from serve.keepawake import KeepAwake
     svc.keep_awake = KeepAwake.create(cfg.get("prevent_sleep") is True)      # #1727: opt-in, Windows only
     if cfg.get("reasoning_effort") is not None:         # #1641: the thinking level of requests that name none
@@ -8403,6 +8433,8 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
         # the browser does, and the main thread must be free to take Ctrl+C and SIGTERM (#1872)
         threading.Thread(target=webbrowser.open, daemon=True, name="strata-open-browser",
                          args=(f"http://{'127.0.0.1' if a.host in ('0.0.0.0', '') else a.host}:{bound_port}/",)).start()
+    if a.engine == "strata":
+        start_update_check(svc, cfg, exe, a.offline, owned=a.owner_fd is not None)
     if ready_path is not None or event_sink is not None:
         ready_host = f"[{here}]" if ":" in here and not here.startswith("[") else here
         record = {"schema_version": 1, "instance_id": svc.instance_id, "pid": os.getpid(),
