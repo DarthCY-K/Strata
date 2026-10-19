@@ -236,9 +236,12 @@ class Main(Base):
         args = cfg["args"]
         self.assertEqual(args[args.index("--resident-budget-gib") + 1], "40")
         self.assertTrue(args[args.index("--native") + 1].endswith("-00001-of-00004.gguf"))
-        for flag in ("--ple-gguf", "--mmap-experts", "--resident-experts", "--control-vector-scaled",
-                     "--kv-resident"):
+        for flag in ("--ple-gguf", "--mmap-experts", "--resident-experts", "--kv-resident"):
             self.assertNotIn(flag, args)
+        # this fork's censorship switch: loaded, off by default (not upstream's speed projection)
+        self.assertTrue(args[args.index("--control-vector-scaled") + 1].replace("\\", "/").endswith(
+            "/data/uncensor/qwen-nvfp4-gptq-uncensored.gguf:1.0"))
+        self.assertIs(cfg["uncensored"], False)
         self.assertEqual(args[args.index("--max-context") + 1], "8192")
         self.assertEqual(cfg["model_name"], "qwen3.8-flash-next-unsloth-ud-q4_k_xl")
         self.assertFalse(cfg["vision"]["gpu"])                               # 11.9 GB: the CPU reader
@@ -682,7 +685,8 @@ class Q3KXL(Base):
         code, out, cfg = self.main(["--context", "8192"], version="0.1.38", m=Q3)
         self.assertEqual(code, 0, out)
         base = f"https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/resolve/{REV}/UD-Q3_K_XL/"
-        self.assertEqual(self.downloads, [base + n for n in setup.UNSLOTH_Q3_K_XL_SHARDS])
+        mmproj = setup.FAMILIES["unsloth"]["mmproj_hf"] + setup.FAMILIES["unsloth"]["mmproj"]   # pictures on (0.2.0)
+        self.assertEqual(self.downloads, [base + n for n in setup.UNSLOTH_Q3_K_XL_SHARDS] + [mmproj])
         self.assertEqual(self.verified, [(n, *v) for n, v in setup.UNSLOTH_Q3_K_XL_SHARDS.items()])
         packs = [r for r in self.runs if r[1].endswith("iq_pack.py")]
         self.assertEqual(len(packs), 1, self.runs)
