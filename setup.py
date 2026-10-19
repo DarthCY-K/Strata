@@ -6687,8 +6687,9 @@ def ask_rope(a, ctx: int, blocker: str | None, untested: str | None = None):
 # ------------------------------------------------------------------------------------------------ this fork
 def version_tuple(v) -> tuple:
     """An engine version as numbers: "0.1.40.3" -> (0, 1, 40, 3); this fork's "0.1.40.3-nvfp4.1" -> (0, 1, 40, 3, 1),
-    above the upstream version it is built on (read number by number it was 0.1.40, an engine to replace)."""
-    m = re.match(r"\s*(\d+(?:\.\d+)*)(?:-nvfp4\.(\d+))?", str(v or ""))
+    above the upstream version it is built on (read number by number it was 0.1.40, an engine to replace).  A
+    pre-release word between them is skipped: "0.2.0-beta-nvfp4.1" -> (0, 2, 0, 0, 1), "0.2.0-beta" -> (0, 2, 0)."""
+    m = re.match(r"\s*(\d+(?:\.\d+)*)(?:-(?!nvfp4\.)[A-Za-z]+\d*)?(?:-nvfp4\.(\d+))?", str(v or ""))
     if not m:
         return ()
     nums = tuple(int(x) for x in m.group(1).split("."))[:5]
