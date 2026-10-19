@@ -1,0 +1,100 @@
+16:16:40 === NVFP4 A/B2 start ['base_a', 'cjk_a', 'cjkh_a', 'base_b', 'cjk_b', 'cjkh_b']
+16:16:40 --- arm base_a kind=base mtp=mtp cvis=0
+16:17:33 base_a ready=36.0 | strata generate: expert cache 5612 slots, 14.45 GiB of VRAM; policy is || strata mtp: draft head over 58963 tokens (152.9 MiB) || strata serve: STRATA_ADAPT_FETCH=2: the PCIe share takes each layer's most-routed misses and admits those routed >= 1.00 and 0.50 more than a resident one; the tier's own
+16:17:42 base_a zh_prose r0: 99.48 tok/s acc 91/196 hit 87.7 c1wait None
+16:17:49 base_a code_zh r0: 108.81 tok/s acc 351/615 hit 84.0 c1wait None
+16:17:56 base_a math_zh r0: 129.07 tok/s acc 437/683 hit 84.5 c1wait None
+16:18:03 base_a code_en r0: 135.31 tok/s acc 489/632 hit 82.2 c1wait None
+16:18:08 base_a zh_prose r1: 97.48 tok/s acc 95/182 hit 85.6 c1wait None
+16:18:15 base_a code_zh r1: 113.65 tok/s acc 357/595 hit 84.3 c1wait None
+16:18:22 base_a math_zh r1: 144.58 tok/s acc 469/638 hit 84.9 c1wait None
+16:18:28 base_a code_en r1: 137.99 tok/s acc 500/618 hit 80.7 c1wait None
+16:18:33 base_a zh_prose r2: 96.34 tok/s acc 96/201 hit 85.9 c1wait None
+16:18:41 base_a code_zh r2: 110.18 tok/s acc 343/608 hit 84.3 c1wait None
+16:18:47 base_a math_zh r2: 140.42 tok/s acc 459/645 hit 85.5 c1wait None
+16:18:53 base_a code_en r2: 137.81 tok/s acc 491/599 hit 80.1 c1wait None
+16:18:57 base_a p9k: prompt 9621 prefill 3872.9 needle True
+16:19:06 base_a p53k: prompt 53178 prefill 7332.2 needle True
+16:19:06 --- arm cjk_a kind=cjk mtp=mtp-cjk cvis=0
+16:19:59 cjk_a ready=36.1 | strata generate: expert cache 5547 slots, 14.28 GiB of VRAM; policy is || strata mtp: draft head over 124737 tokens (323.6 MiB) || strata serve: STRATA_ADAPT_FETCH=2: the PCIe share takes each layer's most-routed misses and admits those routed >= 1.00 and 0.50 more than a resident one; the tier's ow
+16:20:07 cjk_a zh_prose r0: 128.66 tok/s acc 199/293 hit 88.7 c1wait None
+16:20:13 cjk_a code_zh r0: 136.27 tok/s acc 465/627 hit 83.8 c1wait None
+16:20:19 cjk_a math_zh r0: 158.47 tok/s acc 509/633 hit 85.5 c1wait None
+16:20:26 cjk_a code_en r0: 130.02 tok/s acc 481/610 hit 80.3 c1wait None
+16:20:30 cjk_a zh_prose r1: 122.66 tok/s acc 196/278 hit 86.4 c1wait None
+16:20:36 cjk_a code_zh r1: 134.28 tok/s acc 457/625 hit 83.7 c1wait None
+16:20:42 cjk_a math_zh r1: 158.64 tok/s acc 514/648 hit 85.9 c1wait None
+16:20:49 cjk_a code_en r1: 138.94 tok/s acc 503/620 hit 80.9 c1wait None
+16:20:53 cjk_a zh_prose r2: 117.63 tok/s acc 199/279 hit 84.8 c1wait None
+16:20:59 cjk_a code_zh r2: 131.98 tok/s acc 447/592 hit 83.1 c1wait None
+16:21:05 cjk_a math_zh r2: 159.26 tok/s acc 514/637 hit 85.4 c1wait None
+16:21:12 cjk_a code_en r2: 134.57 tok/s acc 489/622 hit 81.2 c1wait None
+16:21:16 cjk_a p9k: prompt 9620 prefill 3871.8 needle True
+16:21:25 cjk_a p53k: prompt 53176 prefill 7383.4 needle True
+16:21:25 --- arm cjkh_a kind=cjk_helper mtp=mtp-cjk cvis=0,1
+16:22:24 cjkh_a ready=42.1 | strata generate: CUDA1: 5726 additional experts, 14.75 GiB; results return through pinned host rows || strata mtp: draft head over 124737 tokens (323.6 MiB) || strata serve: STRATA_ADAPT_FETCH is off (helper GPUs) || strata serve: 644 MiB of VRAM free with everything loaded
+16:22:31 cjkh_a zh_prose r0: 133.06 tok/s acc 198/274 hit 88.5 c1wait 405
+16:22:36 cjkh_a code_zh r0: 161.92 tok/s acc 463/640 hit 90.9 c1wait 382
+16:22:42 cjkh_a math_zh r0: 181.43 tok/s acc 502/654 hit 92.5 c1wait 161
+16:22:47 cjkh_a code_en r0: 165.88 tok/s acc 513/642 hit 88.4 c1wait 218
+16:22:52 cjkh_a zh_prose r1: 120.23 tok/s acc 199/282 hit 87.5 c1wait 303
+16:22:57 cjkh_a code_zh r1: 163.44 tok/s acc 458/616 hit 91.4 c1wait 365
+16:23:02 cjkh_a math_zh r1: 185.67 tok/s acc 513/640 hit 92.6 c1wait 156
+16:23:07 cjkh_a code_en r1: 169.29 tok/s acc 506/597 hit 88.2 c1wait 234
+16:23:12 cjkh_a zh_prose r2: 113.3 tok/s acc 176/293 hit 87.1 c1wait 287
+16:23:17 cjkh_a code_zh r2: 165.06 tok/s acc 465/625 hit 91.0 c1wait 412
+16:23:22 cjkh_a math_zh r2: 183.72 tok/s acc 508/648 hit 92.9 c1wait 170
+16:23:28 cjkh_a code_en r2: 161.79 tok/s acc 491/646 hit 90.7 c1wait 146
+16:23:32 cjkh_a p9k: prompt 9618 prefill 3896.0 needle True
+16:23:41 cjkh_a p53k: prompt 53175 prefill 7317.8 needle True
+16:23:41 --- arm base_b kind=base mtp=mtp cvis=0
+16:24:34 base_b ready=36.0 | strata generate: expert cache 5612 slots, 14.45 GiB of VRAM; policy is || strata mtp: draft head over 58963 tokens (152.9 MiB) || strata serve: STRATA_ADAPT_FETCH=2: the PCIe share takes each layer's most-routed misses and admits those routed >= 1.00 and 0.50 more than a resident one; the tier's own
+16:24:42 base_b zh_prose r0: 103.97 tok/s acc 97/174 hit 87.4 c1wait None
+16:24:49 base_b code_zh r0: 109.09 tok/s acc 362/655 hit 83.8 c1wait None
+16:24:56 base_b math_zh r0: 142.23 tok/s acc 461/665 hit 85.4 c1wait None
+16:25:02 base_b code_en r0: 135.7 tok/s acc 486/605 hit 80.6 c1wait None
+16:25:08 base_b zh_prose r1: 96.97 tok/s acc 98/207 hit 86.1 c1wait None
+16:25:15 base_b code_zh r1: 114.32 tok/s acc 363/596 hit 83.9 c1wait None
+16:25:21 base_b math_zh r1: 145.57 tok/s acc 475/643 hit 84.9 c1wait None
+16:25:28 base_b code_en r1: 133.66 tok/s acc 474/622 hit 81.1 c1wait None
+16:25:33 base_b zh_prose r2: 95.0 tok/s acc 92/206 hit 85.9 c1wait None
+16:25:41 base_b code_zh r2: 108.16 tok/s acc 349/627 hit 83.6 c1wait None
+16:25:47 base_b math_zh r2: 146.34 tok/s acc 471/636 hit 84.9 c1wait None
+16:25:54 base_b code_en r2: 132.7 tok/s acc 476/631 hit 81.1 c1wait None
+16:25:58 base_b p9k: prompt 9620 prefill 3862.2 needle True
+16:26:06 base_b p53k: prompt 53177 prefill 7364.6 needle True
+16:26:06 --- arm cjk_b kind=cjk mtp=mtp-cjk cvis=0
+16:26:59 cjk_b ready=36.0 | strata generate: expert cache 5547 slots, 14.28 GiB of VRAM; policy is || strata mtp: draft head over 124737 tokens (323.6 MiB) || strata serve: STRATA_ADAPT_FETCH=2: the PCIe share takes each layer's most-routed misses and admits those routed >= 1.00 and 0.50 more than a resident one; the tier's ow
+16:27:07 cjk_b zh_prose r0: 131.47 tok/s acc 197/262 hit 88.1 c1wait None
+16:27:13 cjk_b code_zh r0: 136.8 tok/s acc 469/628 hit 83.4 c1wait None
+16:27:18 cjk_b math_zh r0: 158.13 tok/s acc 509/628 hit 84.9 c1wait None
+16:27:25 cjk_b code_en r0: 130.02 tok/s acc 479/626 hit 81.4 c1wait None
+16:27:30 cjk_b zh_prose r1: 124.23 tok/s acc 207/304 hit 86.6 c1wait None
+16:27:36 cjk_b code_zh r1: 134.74 tok/s acc 455/618 hit 83.6 c1wait None
+16:27:42 cjk_b math_zh r1: 159.57 tok/s acc 512/628 hit 85.2 c1wait None
+16:27:49 cjk_b code_en r1: 133.58 tok/s acc 492/628 hit 81.6 c1wait None
+16:27:53 cjk_b zh_prose r2: 116.25 tok/s acc 182/252 hit 84.9 c1wait None
+16:27:59 cjk_b code_zh r2: 135.92 tok/s acc 457/617 hit 83.6 c1wait None
+16:28:05 cjk_b math_zh r2: 158.61 tok/s acc 512/630 hit 85.3 c1wait None
+16:28:12 cjk_b code_en r2: 132.34 tok/s acc 483/617 hit 80.8 c1wait None
+16:28:16 cjk_b p9k: prompt 9619 prefill 3855.8 needle True
+16:28:24 cjk_b p53k: prompt 53173 prefill 7407.9 needle True
+16:28:24 --- arm cjkh_b kind=cjk_helper mtp=mtp-cjk cvis=0,1
+16:29:24 cjkh_b ready=42.0 | strata generate: CUDA1: 5726 additional experts, 14.75 GiB; results return through pinned host rows || strata mtp: draft head over 124737 tokens (323.6 MiB) || strata serve: STRATA_ADAPT_FETCH is off (helper GPUs) || strata serve: 644 MiB of VRAM free with everything loaded
+16:29:31 cjkh_b zh_prose r0: 131.7 tok/s acc 186/249 hit 88.3 c1wait 399
+16:29:36 cjkh_b code_zh r0: 167.87 tok/s acc 469/627 hit 90.9 c1wait 388
+16:29:41 cjkh_b math_zh r0: 184.68 tok/s acc 507/662 hit 91.9 c1wait 145
+16:29:47 cjkh_b code_en r0: 166.79 tok/s acc 502/639 hit 87.7 c1wait 227
+16:29:51 cjkh_b zh_prose r1: 121.97 tok/s acc 189/262 hit 86.3 c1wait 231
+16:29:56 cjkh_b code_zh r1: 166.55 tok/s acc 468/621 hit 90.4 c1wait 383
+16:30:01 cjkh_b math_zh r1: 191.73 tok/s acc 516/652 hit 92.0 c1wait 150
+16:30:07 cjkh_b code_en r1: 163.04 tok/s acc 482/646 hit 90.0 c1wait 150
+16:30:11 cjkh_b zh_prose r2: 126.78 tok/s acc 199/272 hit 88.0 c1wait 268
+16:30:16 cjkh_b code_zh r2: 169.49 tok/s acc 463/611 hit 90.8 c1wait 382
+16:30:21 cjkh_b math_zh r2: 191.83 tok/s acc 511/639 hit 92.0 c1wait 158
+16:30:27 cjkh_b code_en r2: 169.27 tok/s acc 487/607 hit 89.9 c1wait 144
+16:30:31 cjkh_b p9k: prompt 9622 prefill 3904.6 needle True
+16:30:39 cjkh_b p53k: prompt 53178 prefill 7285.3 needle True
+16:30:39 --- restore production NVFP4
+16:31:33 restore ready 36.0
+16:31:33 === ALL DONE === ok

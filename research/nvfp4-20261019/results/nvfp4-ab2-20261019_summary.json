@@ -1,0 +1,256 @@
+{
+ "base_a": {
+  "kind": "base",
+  "tps": 121.22,
+  "ms_step": 18.834,
+  "accept": 0.6726,
+  "by_cat": {
+   "zh_prose": {
+    "tps": 97.7,
+    "acc": 0.487
+   },
+   "code_zh": {
+    "tps": 110.8,
+    "acc": 0.578
+   },
+   "math_zh": {
+    "tps": 137.7,
+    "acc": 0.694
+   },
+   "code_en": {
+    "tps": 137.0,
+    "acc": 0.8
+   }
+  },
+  "prefill": {
+   "p9k": [
+    3872.9,
+    true
+   ],
+   "p53k": [
+    7332.2,
+    true
+   ]
+  },
+  "hit": 84.14,
+  "c1_wait_mean": null,
+  "boot": [
+   "strata generate: expert cache 5612 slots, 14.45 GiB of VRAM; policy is",
+   "strata mtp: draft head over 58963 tokens (152.9 MiB)",
+   "strata serve: STRATA_ADAPT_FETCH=2: the PCIe share takes each layer's most-routed misses and admits those routed >= 1.00 and 0.50 more than a resident one; the tier's own copies are off",
+   "strata serve: 904 MiB of VRAM free with everything loaded"
+  ]
+ },
+ "cjk_a": {
+  "kind": "cjk",
+  "tps": 138.1,
+  "ms_step": 21.703,
+  "accept": 0.7693,
+  "by_cat": {
+   "zh_prose": {
+    "tps": 122.8,
+    "acc": 0.699
+   },
+   "code_zh": {
+    "tps": 134.2,
+    "acc": 0.742
+   },
+   "math_zh": {
+    "tps": 158.8,
+    "acc": 0.801
+   },
+   "code_en": {
+    "tps": 134.4,
+    "acc": 0.795
+   }
+  },
+  "prefill": {
+   "p9k": [
+    3871.8,
+    true
+   ],
+   "p53k": [
+    7383.4,
+    true
+   ]
+  },
+  "hit": 84.14,
+  "c1_wait_mean": null,
+  "boot": [
+   "strata generate: expert cache 5547 slots, 14.28 GiB of VRAM; policy is",
+   "strata mtp: draft head over 124737 tokens (323.6 MiB)",
+   "strata serve: STRATA_ADAPT_FETCH=2: the PCIe share takes each layer's most-routed misses and admits those routed >= 1.00 and 0.50 more than a resident one; the tier's own copies are off",
+   "strata serve: 906 MiB of VRAM free with everything loaded"
+  ]
+ },
+ "cjkh_a": {
+  "kind": "cjk_helper",
+  "tps": 159.97,
+  "ms_step": 18.829,
+  "accept": 0.7613,
+  "by_cat": {
+   "zh_prose": {
+    "tps": 121.9,
+    "acc": 0.675
+   },
+   "code_zh": {
+    "tps": 163.5,
+    "acc": 0.737
+   },
+   "math_zh": {
+    "tps": 183.6,
+    "acc": 0.784
+   },
+   "code_en": {
+    "tps": 165.6,
+    "acc": 0.801
+   }
+  },
+  "prefill": {
+   "p9k": [
+    3896.0,
+    true
+   ],
+   "p53k": [
+    7317.8,
+    true
+   ]
+  },
+  "hit": 90.14,
+  "c1_wait_mean": 269.9,
+  "boot": [
+   "strata generate: expert cache 5659 slots, 14.57 GiB of VRAM; policy is",
+   "strata generate: CUDA1: 5726 additional experts, 14.75 GiB; results return through pinned host rows",
+   "strata mtp: draft head over 124737 tokens (323.6 MiB)",
+   "strata serve: STRATA_ADAPT_FETCH is off (helper GPUs)",
+   "strata serve: 644 MiB of VRAM free with everything loaded"
+  ]
+ },
+ "base_b": {
+  "kind": "base",
+  "tps": 122.09,
+  "ms_step": 18.998,
+  "accept": 0.6708,
+  "by_cat": {
+   "zh_prose": {
+    "tps": 98.3,
+    "acc": 0.489
+   },
+   "code_zh": {
+    "tps": 110.5,
+    "acc": 0.572
+   },
+   "math_zh": {
+    "tps": 144.7,
+    "acc": 0.724
+   },
+   "code_en": {
+    "tps": 134.0,
+    "acc": 0.773
+   }
+  },
+  "prefill": {
+   "p9k": [
+    3862.2,
+    true
+   ],
+   "p53k": [
+    7364.6,
+    true
+   ]
+  },
+  "hit": 84.06,
+  "c1_wait_mean": null,
+  "boot": [
+   "strata generate: expert cache 5612 slots, 14.45 GiB of VRAM; policy is",
+   "strata mtp: draft head over 58963 tokens (152.9 MiB)",
+   "strata serve: STRATA_ADAPT_FETCH=2: the PCIe share takes each layer's most-routed misses and admits those routed >= 1.00 and 0.50 more than a resident one; the tier's own copies are off",
+   "strata serve: 904 MiB of VRAM free with everything loaded"
+  ]
+ },
+ "cjk_b": {
+  "kind": "cjk",
+  "tps": 138.06,
+  "ms_step": 21.754,
+  "accept": 0.7695,
+  "by_cat": {
+   "zh_prose": {
+    "tps": 123.7,
+    "acc": 0.716
+   },
+   "code_zh": {
+    "tps": 135.8,
+    "acc": 0.741
+   },
+   "math_zh": {
+    "tps": 158.8,
+    "acc": 0.813
+   },
+   "code_en": {
+    "tps": 132.0,
+    "acc": 0.777
+   }
+  },
+  "prefill": {
+   "p9k": [
+    3855.8,
+    true
+   ],
+   "p53k": [
+    7407.9,
+    true
+   ]
+  },
+  "hit": 84.12,
+  "c1_wait_mean": null,
+  "boot": [
+   "strata generate: expert cache 5547 slots, 14.28 GiB of VRAM; policy is",
+   "strata mtp: draft head over 124737 tokens (323.6 MiB)",
+   "strata serve: STRATA_ADAPT_FETCH=2: the PCIe share takes each layer's most-routed misses and admits those routed >= 1.00 and 0.50 more than a resident one; the tier's own copies are off",
+   "strata serve: 906 MiB of VRAM free with everything loaded"
+  ]
+ },
+ "cjkh_b": {
+  "kind": "cjk_helper",
+  "tps": 164.02,
+  "ms_step": 18.452,
+  "accept": 0.7675,
+  "by_cat": {
+   "zh_prose": {
+    "tps": 126.8,
+    "acc": 0.733
+   },
+   "code_zh": {
+    "tps": 168.0,
+    "acc": 0.753
+   },
+   "math_zh": {
+    "tps": 189.4,
+    "acc": 0.785
+   },
+   "code_en": {
+    "tps": 166.3,
+    "acc": 0.777
+   }
+  },
+  "prefill": {
+   "p9k": [
+    3904.6,
+    true
+   ],
+   "p53k": [
+    7285.3,
+    true
+   ]
+  },
+  "hit": 89.85,
+  "c1_wait_mean": 252.1,
+  "boot": [
+   "strata generate: expert cache 5659 slots, 14.57 GiB of VRAM; policy is",
+   "strata generate: CUDA1: 5726 additional experts, 14.75 GiB; results return through pinned host rows",
+   "strata mtp: draft head over 124737 tokens (323.6 MiB)",
+   "strata serve: STRATA_ADAPT_FETCH is off (helper GPUs)",
+   "strata serve: 644 MiB of VRAM free with everything loaded"
+  ]
+ }
+}
