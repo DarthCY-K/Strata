@@ -1,0 +1,11 @@
+{"step": "boot", "exe": "/root/strata/releases/strata-nvfp4-attn-20261019-1924", "pid": 618375, "seconds": 42.0}
+{"step": "text", "prompt": 19, "read": 19, "prefill_tps": 134.2, "gen": 41, "tps": 111.41, "accept": 0.6279}
+{"step": "trace", "lines": ["strata attn-daily: chunk=1 merge_v2=1 kv_mode=1 nq=8 cap=2051 lane_cell=0"]}
+{"step": "tool", "pass": true}
+{"step": "short", "zh_prose": {"prompt": 25, "read": 25, "prefill_tps": 141.8, "gen": 386, "tps": 128.41, "accept": 0.705}, "code_zh": {"prompt": 27, "read": 27, "prefill_tps": 191.3, "gen": 700, "tps": 175.92, "accept": 0.8006}, "math_zh": {"prompt": 38, "read": 38, "prefill_tps": 147.8, "gen": 684, "tps": 186.33, "accept": 0.7703}, "code_en": {"prompt": 402, "read": 373, "prefill_tps": 731.6, "gen": 686, "tps": 172.93, "accept": 0.8079}}
+{"step": "long_decode", "prompt": 137599, "read": 137599, "prefill_tps": 6973.3, "gen": 700, "tps": 177.66, "accept": 0.8076}
+{"step": "long_needle", "pass": true, "prompt": 137592}
+{"step": "gpu", "rows": ["0, 513 MiB, 23522 MiB", "1, 273 MiB, 15670 MiB"]}
+{"step": "kernel_scan", "hits": []}
+{"step": "boot", "exe": "/root/strata/releases/strata-nvfp4-attn-20261019-1924", "pid": 619851, "seconds": 42.0}
+{"step": "final", "pid": 619851, "trace_lines_after_restart": 0, "decode": {"prompt": 19, "read": 19, "prefill_tps": 131.6, "gen": 42, "tps": 123.17, "accept": 0.7368}}

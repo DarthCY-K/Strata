@@ -1,0 +1,9 @@
+{
+  "status": "ok",
+  "old": "/root/strata/releases/strata-nvfp4-pa-20261019-1729",
+  "new": "/root/strata/releases/strata-nvfp4-attn-20261019-1924",
+  "new_sha256": "b58b980839c1ff890e3cdd118ed29251ce0e154fe3fc653b55e449ca29435b72",
+  "final_pid": 619851,
+  "config_trace_removed": true,
+  "restored_old": false
+}
