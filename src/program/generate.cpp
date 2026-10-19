@@ -1890,7 +1890,7 @@ double pcie_frac_for_gbps(double gbps, double base) {
 
 // 0.1.42, CUDA single-GPU serve, no --pcie-frac: the share refined from what the CPU pool measures in the first decode
 // windows.  The balance share of the missed experts is link / (link + CPU rate).  The link is the start-up probe; the CPU
-// rate is the expert bytes over the pool's wall time per missed expert (ExpertDispatch::ms_run / multi_misses), which the
+// rate is the expert bytes over the pool's wall time per missed expert (ExpertDispatch::ms_pool_cpu / multi_misses), which the
 // engine already times.  The best shares measured with the route tail skip on (RTX 3060 0.15-0.20, Tesla P100 0.20, RTX
 // A4000 flat from 0.15 to 0.40; the 0.1.41 rule gave 0.55, 0.29, 0.30) lie within one 0.05 step of link / (link + 1.85 x pool rate).
 // Three updates at most (after 48, then 96 and 96 more windows), each rounded to 0.05, so a noisy window cannot move
@@ -9932,8 +9932,8 @@ int main(int argc, char** argv) {
             if (!pcie_auto.on) return;
             double tc_us = 0.0, rate = 0.0;
             const double nf = req_pcie_frac == o.pcie_frac
-                                  ? pcie_auto.window(drive.d.ms_run, drive.d.multi_misses, o.pcie_frac, &tc_us, &rate)
-                                  : (pcie_auto.mark(drive.d.ms_run, drive.d.multi_misses), -1.0);
+                                  ? pcie_auto.window(drive.d.ms_pool_cpu, drive.d.multi_misses, o.pcie_frac, &tc_us, &rate)
+                                  : (pcie_auto.mark(drive.d.ms_pool_cpu, drive.d.multi_misses), -1.0);
             if (nf < 0.0) return;
             std::fprintf(stderr, "strata serve: PCIe share: the CPU pool takes %.0f us per missed expert (%.1f GB/s of expert bytes), "
                                  "the link %.1f GB/s -> pcie_frac %.2f (was %.2f; --pcie-frac N fixes it, "
@@ -14030,7 +14030,7 @@ int main(int argc, char** argv) {
             const uint64_t file_bytes0 = src.file_read_bytes();
             const int64_t decode_look0 = drive.d.cache_hits + drive.d.cache_admitted + drive.d.cache_refused;
             const int64_t offload0 = drive.d.offload_entries;   // #588
-            pcie_auto.mark(drive.d.ms_run, drive.d.multi_misses);   // the prompt's windows are not the decode's
+            pcie_auto.mark(drive.d.ms_pool_cpu, drive.d.multi_misses);   // the prompt's windows are not the decode's
             if (cancelled) finish = nf_hit ? "nonfinite" : "cancel";
             // ======== --pipeline-windows 2: the decode windows with the two cards overlapped ========
             // Stage 0 (the first card) runs window K+1 while stage 1 verifies window K, on the guess that K is accepted

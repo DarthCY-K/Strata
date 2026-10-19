@@ -4224,6 +4224,7 @@ void expert_pool_dispatch_multi(ExpertDispatch& d, const float* x_f, const int32
         if (native) d.pool->run_split_multi_native(lay.fmt[(size_t) d.layers], d.jobs_multi.data(), njobs);
         else d.pool->run_split_multi(d.jobs_multi.data(), njobs);
     }
+    const auto c3b = std::chrono::steady_clock::now();   // the pool is done; what follows waits for the other GPUs
     if (d.remote_count > 0) {
         static thread_local std::string remote_error;
         for (int r = 0; r < d.remote_count; ++r)
@@ -4248,6 +4249,7 @@ void expert_pool_dispatch_multi(ExpertDispatch& d, const float* x_f, const int32
     d.ms_actq += ms(c1, c2);
     d.ms_jobs += ms(c2, c3);
     d.ms_run += ms(c3, c4);
+    d.ms_pool_cpu += ms(c3, c3b);
     for (int64_t i = 0; i < n_tok * k; ++i) {
         const int64_t e = ids[i];
         if (e >= 0 && e < d.n_expert) d.job_of[(size_t) e] = -1;

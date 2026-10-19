@@ -472,6 +472,9 @@ struct ExpertDispatch {
     int64_t tail_skipped = 0;
     int64_t tail_experts = 0;
     double ms_plan = 0, ms_actq = 0, ms_jobs = 0, ms_run = 0;   ///< verify-window dispatch sections
+    /// the CPU pool's own share of ms_run: ms_run also waits for the helper GPUs and the peer, so a pool rate derived
+    /// from ms_run alone reads that wait as CPU time (PcieAuto then over-shares PCIe); PcieAuto reads this one
+    double ms_pool_cpu = 0;
     /// Plan v0.3 P6: decayed routing counts per (layer, expert) during decode (sized by the caller; empty = off),
     /// which the driver uses to swap the most-routed missing experts into the VRAM tier between rounds.
     std::vector<float> usage;
