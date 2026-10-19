@@ -47,6 +47,9 @@ NETWORK_ALLOWED = {
     ("strata_control/tune_api.py", "urlopen"): "the loopback engine/server of a tuning job the user started",
     ("strata_control/tune_session.py", "urlopen"): "the loopback engine (127.0.0.1) the auto-tuner a user started measures",
     ("strata_control/components.py", "urlopen"): "the component fetcher: only `strata install`/UPDATE call it",
+    # strata-nvfp4: the server's update notice - not an acquisition: no download, no install, off by a switch
+    ("strata_control/fork_release.py", "urlopen"): "strata-nvfp4's update notice: at most once a day the latest "
+                                                   "release's tag (a version, read only; STRATA_UPDATE_CHECK=0 off)",
 }
 #: Modules that import the installer on purpose, with the explicit command that reaches them.
 INSTALLER_IMPORT_ALLOWED = {

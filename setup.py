@@ -6685,17 +6685,9 @@ def ask_rope(a, ctx: int, blocker: str | None, untested: str | None = None):
 
 
 # ------------------------------------------------------------------------------------------------ this fork
-def version_tuple(v) -> tuple:
-    """An engine version as numbers: "0.1.40.3" -> (0, 1, 40, 3); this fork's "0.1.40.3-nvfp4.1" -> (0, 1, 40, 3, 1),
-    above the upstream version it is built on (read number by number it was 0.1.40, an engine to replace).  A
-    pre-release word between them is skipped: "0.2.0-beta-nvfp4.1" -> (0, 2, 0, 0, 1), "0.2.0-beta" -> (0, 2, 0)."""
-    m = re.match(r"\s*(\d+(?:\.\d+)*)(?:-(?!nvfp4\.)[A-Za-z]+\d*)?(?:-nvfp4\.(\d+))?", str(v or ""))
-    if not m:
-        return ()
-    nums = tuple(int(x) for x in m.group(1).split("."))[:5]
-    if m.group(2) is not None:
-        nums = (nums + (0, 0, 0, 0))[:4] + (int(m.group(2)),)
-    return nums
+# version_tuple: an engine version as numbers, this fork's "0.2.0-beta-nvfp4.1" -> (0, 2, 0, 0, 1) - one order shared
+# with the server's update notice (strata_control/fork_release.py)
+from strata_control.fork_release import version_tuple, release_version as _fork_release_version  # noqa: E402
 
 
 def version_text(v: tuple) -> str:
@@ -6708,15 +6700,13 @@ def version_text(v: tuple) -> str:
 
 def release_version() -> str:
     """This fork's release, its tag v<this>: release/make_windows_bundle.py's VERSION, else the engine source's."""
+    v = _fork_release_version(ROOT)
+    if v:
+        return v
     try:
-        m = re.search(r'^VERSION = "([^"]+)"', (ROOT / "release" / "make_windows_bundle.py").read_text(encoding="utf-8"),
-                      re.M)
-        return m.group(1) if m else source_version()
+        return source_version()
     except OSError:
-        try:
-            return source_version()
-        except OSError:
-            return "0"
+        return "0"
 
 
 # The fork's own release or newer, so a `git pull` brings its engine as upstream's MIN_ENGINE bump does
