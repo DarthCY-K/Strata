@@ -8437,7 +8437,7 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
         try:
             from serve import app_ui
             from strata_control import fork_release
-            app_ui.start(svc, here, bound_port, version=(getattr(engine, "info", {}) or {}).get("version"),
+            app_ui.start(svc, here, bound_port, version=fork_release.installed_version(ROOT, exe)[0],
                          update_off=fork_release.disabled(cfg, offline=a.offline) is not None)
         except Exception as e:                             # noqa: BLE001 - the server works without it
             print(f"       new interface: not started ({type(e).__name__}: {e}); the page above works", flush=True)
