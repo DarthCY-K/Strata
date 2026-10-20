@@ -8433,6 +8433,14 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
         # the browser does, and the main thread must be free to take Ctrl+C and SIGTERM (#1872)
         threading.Thread(target=webbrowser.open, daemon=True, name="strata-open-browser",
                          args=(f"http://{'127.0.0.1' if a.host in ('0.0.0.0', '') else a.host}:{bound_port}/",)).start()
+    if os.environ.get("STRATA_APP_UI"):                  # strata-nvfp4: the new interface beside this server (serve/app_ui.py)
+        try:
+            from serve import app_ui
+            from strata_control import fork_release
+            app_ui.start(svc, here, bound_port, version=(getattr(engine, "info", {}) or {}).get("version"),
+                         update_off=fork_release.disabled(cfg, offline=a.offline) is not None)
+        except Exception as e:                             # noqa: BLE001 - the server works without it
+            print(f"       new interface: not started ({type(e).__name__}: {e}); the page above works", flush=True)
     if a.engine == "strata":
         start_update_check(svc, cfg, exe, a.offline, owned=a.owner_fd is not None)
     if ready_path is not None or event_sink is not None:
