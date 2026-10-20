@@ -6,8 +6,6 @@
 #include "strata/kernels/verify_kernels.hpp"
 
 #include <algorithm>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
 namespace strata::core {
@@ -99,28 +97,13 @@ void RemoteExpertOpt::prepare(const RemoteExperts& remote, void* metadata) const
 }
 
 bool RemoteExpertOpt::reduce(RemoteExperts& remote, const void* metadata, std::string& err) {
-    auto& p = *std::find_if(peers_.begin(), peers_.end(), [&](const Peer& p) { return p.remote == &remote; });
-    // Process-wide opt-in, fixed before first use (including graph capture). The
-    // default keeps the original kernel + D2H path for same-binary A/B runs.
-    static const bool enabled = [] {
-        const char* value = std::getenv("STRATA_REMOTE_REDUCE_MAPPED");
-        return value && std::strcmp(value, "1") == 0;
-    }();
-    static const bool trace = [] {
-        const char* value = std::getenv("STRATA_REMOTE_REDUCE_TRACE");
-        return value && std::strcmp(value, "1") == 0;
-    }();
-    const bool mapped = enabled && remote.zero_copy_;
-    if (trace && !p.reduce_traced) {
-        std::fprintf(stderr, "strata: remote reduce device=%d enabled=%d zero_copy=%d path=%s\n",
-                     remote.device_, enabled, remote.zero_copy_, mapped ? "mapped-host" : "device-copy");
-        p.reduce_traced = true;
-    }
-    // finish() synchronizes this stream before reading h_out_. Only change the
-    // destination; the kernel, metadata, arithmetic and fallback stay identical.
+    const auto& p = *std::find_if(peers_.begin(), peers_.end(), [&](const Peer& p) { return p.remote == &remote; });
+    // finish() synchronizes this stream before the host reads h_out_. When mapped output is available,
+    // write the reduced rows there directly, avoiding a separate device-to-host copy for every layer.
+    float* sum = remote.zero_copy_ ? remote.z_out_ : p.sum;
     reduce_experts<<<dim3((H + 255) / 256, tokens_), 256, 0, remote.stream_>>>(
-        remote.d_out_, (const ReduceMeta*) metadata, mapped ? remote.z_out_ : p.sum);
-    if (mapped) return check(cudaGetLastError(), err);
+        remote.d_out_, (const ReduceMeta*) metadata, sum);
+    if (remote.zero_copy_) return check(cudaGetLastError(), err);
     return check(cudaMemcpyAsync(remote.h_out_, p.sum, tokens_ * H * sizeof(float),
                                   cudaMemcpyDeviceToHost, remote.stream_), err);
 }

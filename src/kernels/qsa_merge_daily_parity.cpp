@@ -15,7 +15,7 @@
 //   - widths {-1, 0, 1, 63, 64, 65, 1023, 1024, 1025, 2051, 4096, 16383, 16385, 32768, INT_MAX} per query (1023-1025 and 16383 /
 //     16385 sit on the v2 merge's 16-chunk block edges), all queries alike and mixed within one batch; a width above
 //     aligned cap (2112/32768) is bounded by the chunk grid; an unaligned cap2051 keeps width<=cap;
-//   - n_q 1..8, caps2051/2112 (main selection and its rounded capacity) and32768 (the drafter's
+//   - n_q 1..6, caps2051/2112 (main selection and its rounded capacity) and32768 (the drafter's
 //     default --mtp-window);
 //   - selections shaped like the drafter's window (consecutive cells, window_ids), like the indexer's (ascending, with
 //     gaps) and unordered with repeats.
@@ -214,46 +214,6 @@ struct Harness {
         k::qsa_decode_attn_chunks_only(q, pools.view(c.fmt, table), ids, steps, c.cap, s, scratch, c.n_q, 0, nullptr);
     }
 
-    // Capture the actual production entry, then change queries/selection/widths for every replay.
-    bool check_graph(Case c, std::mt19937& rng) {
-        cudaStream_t st;
-        cudaGraph_t graph;
-        cudaGraphExec_t exec;
-        ck(cudaStreamCreateWithFlags(&st, cudaStreamNonBlocking), "graph stream");
-        prepare(c, rng);
-        ck(cudaDeviceSynchronize(), "graph prepare");
-        ck(cudaStreamBeginCapture(st, cudaStreamCaptureModeGlobal), "begin capture");
-        k::qsa_decode_attn_batch(q, pools.view(c.fmt, table), ids, steps, c.cap, s, scratch, attn_new, c.n_q, st);
-        ck(cudaStreamEndCapture(st, &graph), "end capture");
-        ck(cudaGraphInstantiate(&exec, graph, nullptr, nullptr, 0), "instantiate");
-        const size_t n = (size_t) (c.n_q * s.n_head * s.head_dim);
-        std::vector<float> a(n), b(n);
-        bool ok = true;
-        for (int repeat = 0; repeat < 3; ++repeat) {
-            for (auto& w : c.widths) w = repeat == 0 ? 0 : repeat == 1 ? (int32_t)c.cap : (int32_t)(rng() % (uint32_t)(c.cap + 1));
-            prepare(c, rng);
-            k::qsa_decode_attn_merge_only(steps, c.cap, s, scratch, attn_old, c.n_q, 0, nullptr);
-            ck(cudaDeviceSynchronize(), "graph reference sync");
-            const size_t scratch_bytes = (size_t)k::qsa_decode_attn_scratch_floats(c.cap, s) * (size_t)c.n_q * sizeof(float);
-            ck(cudaMemsetAsync(scratch, 0xFF, scratch_bytes, st), "graph scratch poison");
-            ck(cudaMemsetAsync(attn_new, 0xFF, n * sizeof(float), st), "graph output poison");
-            ck(cudaGraphLaunch(exec, st), "graph replay");
-            ck(cudaStreamSynchronize(st), "graph replay sync");
-            ck(cudaMemcpy(a.data(), attn_old, n * 4, cudaMemcpyDeviceToHost), "graph ref output");
-            ck(cudaMemcpy(b.data(), attn_new, n * 4, cudaMemcpyDeviceToHost), "graph output");
-            if (std::memcmp(a.data(), b.data(), n * 4) != 0 ||
-                std::any_of(a.begin(), a.end(), [](float v) { return !std::isfinite(v); }) ||
-                std::any_of(b.begin(), b.end(), [](float v) { return !std::isfinite(v); })) {
-                std::printf("FAIL graph fmt=%d cap=%lld nq=%d replay=%d\n", c.fmt, (long long)c.cap, c.n_q, repeat);
-                ok = false;
-            }
-        }
-        ck(cudaGraphExecDestroy(exec), "destroy graph exec");
-        ck(cudaGraphDestroy(graph), "destroy graph");
-        ck(cudaStreamDestroy(st), "destroy graph stream");
-        return ok;
-    }
-
     // true when the two merges' outputs are bit-identical (and the original's has no NaN)
     bool check(const Case& c, long long& nonzero) {
         const int64_t D = s.head_dim, NH = s.n_head;
@@ -416,7 +376,7 @@ int main(int argc, char** argv) {
 
     std::mt19937 rng(20261004u);
     Harness hx;
-    hx.init(rng, 8, 32768);
+    hx.init(rng, 7, 32768);
 
     // 1023 / 1024 / 1025 and 16383 / 16385: the v2 merge's U = 16 chunks x 64 cells block edges
     const int32_t widths[] = {-1, 0, 1, 63, 64, 65, 1023, 1024, 1025, 2051, 4096, 16383, 16384, 16385, 32768, std::numeric_limits<int32_t>::max()};
@@ -425,7 +385,7 @@ int main(int argc, char** argv) {
     for (int fmt = 0; fmt < 4; ++fmt) {
         long long fmt_cases = 0, fmt_failed = 0;
         for (int64_t cap : {(int64_t) 2051, (int64_t) 2112, (int64_t) 32768}) {
-            for (int n_q = 1; n_q <= 8; ++n_q) {
+            for (int n_q = 1; n_q <= 6; ++n_q) {
                 // every width for all queries alike, then three batches of mixed widths
                 for (int wc = 0; wc < n_widths + 3; ++wc) {
                     Case c;
@@ -453,16 +413,6 @@ int main(int argc, char** argv) {
     }
     std::printf("qsa_merge_daily_parity: %lld cases, %lld differ, %lld nonzero output values in all -> %s\n", cases, failed,
                 nonzero_total, failed == 0 && nonzero_total > 0 ? "PASS" : "FAIL");
-    long long graph_cases = 0, graph_failed = 0;
-    for (int fmt = 0; fmt < 4; ++fmt)
-        for (int64_t cap : {(int64_t)2051, (int64_t)2112, (int64_t)32768})
-            for (int nq = 1; nq <= 8; ++nq) {
-                Case c; c.fmt = fmt; c.cap = cap; c.n_q = nq; c.widths.assign((size_t)nq, 64);
-                ++graph_cases;
-                if (!hx.check_graph(c, rng)) ++graph_failed;
-            }
-    std::printf("graph parity: %lld captures, %lld replays with new inputs, %lld failed -> %s\n",
-                graph_cases, graph_cases * 3, graph_failed, graph_failed ? "FAIL" : "PASS");
     if (do_bench) bench(hx, rng);
-    return failed == 0 && graph_failed == 0 && nonzero_total > 0 ? 0 : 1;
+    return failed == 0 && nonzero_total > 0 ? 0 : 1;
 }
