@@ -352,6 +352,9 @@ def plan(cards: list[dict] | None, ram_gb: float | None, disk_free_gb: float | N
     On a unified-memory APU (Ryzen AI Max, gfx1151) the plan counts one pool: also `uma: True` and `streamed_gb` (the experts
     read from the SSD), tp 1 and no args (nothing to split between cards)."""
     if variant(model):
+        mac = mac_card(cards)
+        if mac is not None and variant_key(model) in MAC_SET_PACK:
+            return _plan_mac(variant_key(model), model, mac, ram_gb, disk_free_gb, context)
         mine = gpu_fit.for_vendor(list(cards or []), vendor)[0] if vendor else list(cards or [])
         card = uma_card(mine)
         if card is not None:
