@@ -94,6 +94,22 @@ int env_tri(const char* name) {
 double now_ms() {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
+// rows past the chunk that the Metal expert tile may read (its 16-row load of the last partial tile); CUDA and HIP allocate none
+#if defined(STRATA_METAL)
+constexpr size_t kH16Pad = 16;
+#else
+constexpr size_t kH16Pad = 0;
+#endif
+// the embedding rows' upload: asynchronous on the device's stream; on Metal a synchronous copy (the batched dispatches read the rows when
+// they are committed, and h_emb is written again by the next window)
+inline cudaError_t emb_upload(void* dst, const void* src, size_t n, cudaStream_t s) {
+#if defined(STRATA_METAL)
+    (void) s;
+    return cudaMemcpy(dst, src, n, cudaMemcpyHostToDevice);
+#else
+    return cudaMemcpyAsync(dst, src, n, cudaMemcpyHostToDevice, s);
+#endif
+}
 
 size_t align256(size_t n) { return (n + 255) & ~(size_t) 255; }
 
