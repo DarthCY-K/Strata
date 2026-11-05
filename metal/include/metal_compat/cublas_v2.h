@@ -12,6 +12,7 @@
 #include <cstdlib>
 
 #include "cuda_runtime.h"
+#include "ds4_metal_host.h"   // the kernels that have a Metal dispatch
 
 typedef void* cublasHandle_t;
 
@@ -21,6 +22,7 @@ enum cublasOperation_t { CUBLAS_OP_N = 0, CUBLAS_OP_T = 1, CUBLAS_OP_C = 2 };
 enum cublasComputeType_t { CUBLAS_COMPUTE_16F = 64, CUBLAS_COMPUTE_32F = 68, CUBLAS_COMPUTE_32F_FAST_16F = 74 };
 enum cublasGemmAlgo_t { CUBLAS_GEMM_DEFAULT = -1, CUBLAS_GEMM_DEFAULT_TENSOR_OP = 99 };
 enum cudaDataType_t { CUDA_R_32F = 0, CUDA_R_16F = 2, CUDA_R_16BF = 14, CUDA_R_8F_E4M3 = 28 };
+using cudaDataType = cudaDataType_t;   // the engine names it both ways
 
 static inline cublasStatus_t cublasCreate(cublasHandle_t* h) {
     *h = (void*) 1;   // the Metal runtime is a singleton: the handle carries no state
@@ -39,14 +41,32 @@ static inline cublasStatus_t cublasSetWorkspace(cublasHandle_t, void*, size_t) {
     std::abort();
 }
 
-static inline cublasStatus_t cublasSgemm(cublasHandle_t, cublasOperation_t, cublasOperation_t, int, int, int,
-                                         const float*, const float*, int, const float*, int, const float*, float*, int) {
+static inline cublasStatus_t cublasSgemm(cublasHandle_t, cublasOperation_t opA, cublasOperation_t opB, int m, int n, int k,
+                                         const float* alpha, const float* A, int lda, const float* B, int ldb,
+                                         const float* beta, float* C, int ldc) {
+    // the mHC mixes (ds4_model.cu:2737): C = A^T B, F32, alpha 1, beta 0
+    if (opA == CUBLAS_OP_T && opB == CUBLAS_OP_N && alpha && beta && *alpha == 1.0f && *beta == 0.0f &&
+        strata::dsv41::metal_host::sgemm_tn(A, B, C, m, n, k, lda, ldb, ldc)) {
+        return CUBLAS_STATUS_SUCCESS;
+    }
     strata_metal_dense_gemm_missing("cublasSgemm");
 }
 
 // the mixed-precision form: any argument list, because the engine passes cuBLAS's full 19-argument spelling; the body
 // names kernels/dense_mm.metal, which is where the real implementation goes.
+// the chunk path's call (F16 weights [m][k] x F16 rows [n][k] -> F32 rows [n][m]): the MPP tile GEMM
+static inline cublasStatus_t cublasGemmEx(cublasHandle_t, cublasOperation_t ta, cublasOperation_t tb, int m, int n, int k,
+                                          const void* alpha, const void* A, cudaDataType_t at, int lda, const void* B,
+                                          cudaDataType_t bt, int ldb, const void* beta, void* C, cudaDataType_t ct, int ldc,
+                                          cublasComputeType_t, cublasGemmAlgo_t) {
+    if (ta == CUBLAS_OP_T && tb == CUBLAS_OP_N && at == CUDA_R_16F && bt == CUDA_R_16F && ct == CUDA_R_32F && lda == k &&
+        strata::dsv41::metal_host::gemm_f16_nt((const uint16_t*) A, (const uint16_t*) B, ldb, (float*) C, ldc, n, m, k, *(const float*) alpha,
+                                               *(const float*) beta))
+        return CUBLAS_STATUS_SUCCESS;
+    strata_metal_dense_gemm_missing("cublasGemmEx (this operand combination)");
+}
+
 template <typename... A>
-static inline cublasStatus_t cublasGemmEx(A...) {
+static inline cublasStatus_t cublasGemmEx_unsupported(A...) {
     strata_metal_dense_gemm_missing("cublasGemmEx");
 }
